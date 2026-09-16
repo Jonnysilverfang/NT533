@@ -27,7 +27,7 @@ aws cloudformation package `
 if ($LASTEXITCODE -ne 0) { throw 'DR packaging failed.' }
 
 $drObjectKey = "releases/$ReleaseVersion/dr-root.yaml"
-aws s3api head-object --bucket $DrArtifactBucket --key $drObjectKey --region ap-southeast-1 2>$null | Out-Null
+$null = cmd.exe /c "aws s3api head-object --bucket $DrArtifactBucket --key $drObjectKey --region ap-southeast-1 >nul 2>&1"
 if ($LASTEXITCODE -eq 0) {
     throw "Immutable DR template already exists at s3://$DrArtifactBucket/$drObjectKey. Use a new ReleaseVersion."
 }

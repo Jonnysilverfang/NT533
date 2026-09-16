@@ -25,8 +25,9 @@ def handler(event, _context):
                     "expires_at": expires_at,
                 },
                 ConditionExpression=(
-                    "attribute_not_exists(lock_name) OR expires_at < :now OR owner = :owner"
+                    "attribute_not_exists(lock_name) OR expires_at < :now OR #owner = :owner"
                 ),
+                ExpressionAttributeNames={"#owner": "owner"},
                 ExpressionAttributeValues={":now": now, ":owner": owner},
             )
             return {"acquired": True, "owner": owner, "expires_at": expires_at}
@@ -46,7 +47,8 @@ def handler(event, _context):
         try:
             table.delete_item(
                 Key={"lock_name": LOCK_NAME},
-                ConditionExpression="owner = :owner",
+                ConditionExpression="#owner = :owner",
+                ExpressionAttributeNames={"#owner": "owner"},
                 ExpressionAttributeValues={":owner": owner},
             )
             return {"released": True}

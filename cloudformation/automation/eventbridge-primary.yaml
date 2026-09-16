@@ -43,9 +43,6 @@ Resources:
         - Id: DrRegionEventBus
           Arn: !Ref DrEventBusArn
           RoleArn: !GetAtt ForwardRole.Arn
-          RetryPolicy:
-            MaximumEventAgeInSeconds: 86400
-            MaximumRetryAttempts: 185
           DeadLetterConfig:
             Arn: !GetAtt ForwardingDeadLetterQueue.Arn
 

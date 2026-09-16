@@ -32,48 +32,51 @@ if (@($secondary).Count -gt 0) {
 }
 
 $stack = $null
-$stackJson = aws cloudformation describe-stacks --stack-name $StackName --region $Region --output json 2>$null
-if ($LASTEXITCODE -eq 0) {
+$stackJson = cmd.exe /c "aws cloudformation describe-stacks --stack-name $StackName --region $Region --output json 2>nul"
+if ($LASTEXITCODE -eq 0 -and $stackJson) {
     $stack = ($stackJson | ConvertFrom-Json).Stacks[0]
     $outputs = @{}
     foreach ($output in $stack.Outputs) { $outputs[$output.OutputKey] = $output.OutputValue }
     foreach ($serviceKey in @('AuthServiceName', 'ProductServiceName', 'OrderServiceName')) {
         if ($outputs[$serviceKey]) {
-            aws ecs update-service --cluster $outputs.EcsClusterName --service $outputs[$serviceKey] --desired-count 0 --region $Region | Out-Null
+            $null = cmd.exe /c "aws ecs update-service --cluster $($outputs.EcsClusterName) --service $($outputs[$serviceKey]) --desired-count 0 --region $Region 2>nul"
             if ($LASTEXITCODE -ne 0) { throw "Failed to scale $serviceKey to zero." }
         }
     }
 }
 
-$dbJson = aws rds describe-db-instances --db-instance-identifier $DbInstanceIdentifier --region $Region --output json 2>$null
-if ($LASTEXITCODE -eq 0) {
+$dbJson = cmd.exe /c "aws rds describe-db-instances --db-instance-identifier $DbInstanceIdentifier --region $Region --output json 2>nul"
+if ($LASTEXITCODE -eq 0 -and $dbJson) {
     $database = ($dbJson | ConvertFrom-Json).DBInstances[0]
     if ($database.DeletionProtection) {
         if (-not $AllowDisableDeletionProtection) {
             throw 'RDS deletion protection is enabled. Re-run with -AllowDisableDeletionProtection only after explicit cleanup approval.'
         }
-        aws rds modify-db-instance --db-instance-identifier $DbInstanceIdentifier --no-deletion-protection --apply-immediately --region $Region | Out-Null
+        $null = cmd.exe /c "aws rds modify-db-instance --db-instance-identifier $DbInstanceIdentifier --no-deletion-protection --apply-immediately --region $Region 2>nul"
         if ($LASTEXITCODE -ne 0) { throw 'Failed to disable RDS deletion protection.' }
-        aws rds wait db-instance-available --db-instance-identifier $DbInstanceIdentifier --region $Region
+        $null = cmd.exe /c "aws rds wait db-instance-available --db-instance-identifier $DbInstanceIdentifier --region $Region 2>nul"
         if ($LASTEXITCODE -ne 0) { throw 'RDS did not become available after disabling deletion protection.' }
     }
 
     if ($SkipFinalSnapshot) {
-        aws rds delete-db-instance --db-instance-identifier $DbInstanceIdentifier --skip-final-snapshot --region $Region | Out-Null
+        $null = cmd.exe /c "aws rds delete-db-instance --db-instance-identifier $DbInstanceIdentifier --skip-final-snapshot --region $Region 2>nul"
     } else {
         $snapshotId = "$DbInstanceIdentifier-cleanup-$(Get-Date -Format 'yyyyMMddHHmmss')"
-        aws rds delete-db-instance --db-instance-identifier $DbInstanceIdentifier --final-db-snapshot-identifier $snapshotId --region $Region | Out-Null
+        $null = cmd.exe /c "aws rds delete-db-instance --db-instance-identifier $DbInstanceIdentifier --final-db-snapshot-identifier $snapshotId --region $Region 2>nul"
         Write-Host "Requested final snapshot: $snapshotId"
     }
     if ($LASTEXITCODE -ne 0) { throw 'Failed to request restored RDS deletion.' }
-    aws rds wait db-instance-deleted --db-instance-identifier $DbInstanceIdentifier --region $Region
+    Write-Host "Waiting for RDS instance $DbInstanceIdentifier deletion..."
+    $null = cmd.exe /c "aws rds wait db-instance-deleted --db-instance-identifier $DbInstanceIdentifier --region $Region 2>nul"
     if ($LASTEXITCODE -ne 0) { throw 'Restored RDS deletion did not complete.' }
 }
 
 if ($stack) {
-    aws cloudformation delete-stack --stack-name $StackName --region $Region
+    Write-Host "Requesting deletion of DR CloudFormation stack $StackName..."
+    $null = cmd.exe /c "aws cloudformation delete-stack --stack-name $StackName --region $Region 2>nul"
     if ($LASTEXITCODE -ne 0) { throw 'Failed to request DR runtime stack deletion.' }
-    aws cloudformation wait stack-delete-complete --stack-name $StackName --region $Region
+    Write-Host "Waiting for CloudFormation stack $StackName deletion..."
+    $null = cmd.exe /c "aws cloudformation wait stack-delete-complete --stack-name $StackName --region $Region 2>nul"
     if ($LASTEXITCODE -ne 0) { throw 'DR runtime stack deletion did not complete.' }
 }
 

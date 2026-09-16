@@ -1,5 +1,6 @@
 import hashlib
 import json
+import uuid
 
 import boto3
 
@@ -18,6 +19,14 @@ def handler(event, _context):
     except rds.exceptions.DBInstanceNotFoundFault:
         existing = None
     if existing:
+        if existing["DBInstanceStatus"] == "available":
+            jobs = backup.list_restore_jobs(ByResourceType="RDS").get("RestoreJobs", [])
+            for j in jobs:
+                if (
+                    j.get("CreatedResourceArn") == existing.get("DBInstanceArn")
+                    and j.get("Status") == "COMPLETED"
+                ):
+                    return {"restore_job_id": j["RestoreJobId"]}
         raise RuntimeError(
             f"DR database {db_identifier} already exists with status "
             f"{existing['DBInstanceStatus']}; run guarded cleanup before a new restore"
@@ -27,6 +36,22 @@ def handler(event, _context):
         BackupVaultName=event["backup_vault_name"],
         RecoveryPointArn=recovery_point_arn,
     )["RestoreMetadata"]
+
+    for key in [
+        "DBSnapshotIdentifier",
+        "AvailabilityZone",
+        "DBParameterGroupName",
+        "DBName",
+        "aws:backup:request-id",
+    ]:
+        metadata.pop(key, None)
+
+    for key in list(metadata.keys()):
+        if key.startswith("InformationalOnly:"):
+            metadata.pop(key, None)
+
+    if metadata.get("Port") == "0" or not metadata.get("Port"):
+        metadata["Port"] = "5432"
 
     metadata.update(
         {
@@ -41,8 +66,7 @@ def handler(event, _context):
         }
     )
 
-    token_source = f"{recovery_point_arn}|{db_identifier}"
-    token = hashlib.sha256(token_source.encode("utf-8")).hexdigest()[:48]
+    token = uuid.uuid4().hex[:32]
     response = backup.start_restore_job(
         RecoveryPointArn=recovery_point_arn,
         IamRoleArn=event["restore_role_arn"],

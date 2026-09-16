@@ -78,7 +78,7 @@ Resources:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
-                Action: [backup:GetRecoveryPointRestoreMetadata, backup:StartRestoreJob]
+                Action: [backup:GetRecoveryPointRestoreMetadata, backup:StartRestoreJob, backup:ListRestoreJobs, backup:DescribeRestoreJob]
                 Resource: '*'
               - Effect: Allow
                 Action: rds:DescribeDBInstances
@@ -264,6 +264,13 @@ Resources:
                 Condition:
                   StringEquals:
                     iam:PassedToService: ecs-tasks.amazonaws.com
+              - Sid: PassRoleToCloudFormation
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: cloudformation.amazonaws.com
               - Effect: Allow
                 Action: s3:GetObject
                 Resource: !Sub '${ArtifactBucketArn}/*'
@@ -285,6 +292,9 @@ Resources:
               - Effect: Allow
                 Action: [cloudformation:CreateStack, cloudformation:DescribeStacks]
                 Resource: !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-runtime-*/*'
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub '${ArtifactBucketArn}/*'
               - Effect: Allow
                 Action: iam:PassRole
                 Resource: !GetAtt CloudFormationExecutionRole.Arn
