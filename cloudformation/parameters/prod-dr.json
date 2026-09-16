@@ -1,0 +1,16 @@
+[
+  {"ParameterKey":"ProjectName","ParameterValue":"prod-dr"},
+  {"ParameterKey":"VpcCidr","ParameterValue":"10.20.0.0/16"},
+  {"ParameterKey":"PublicSubnet1Cidr","ParameterValue":"10.20.0.0/24"},
+  {"ParameterKey":"PublicSubnet2Cidr","ParameterValue":"10.20.1.0/24"},
+  {"ParameterKey":"PrivateAppSubnet1Cidr","ParameterValue":"10.20.10.0/24"},
+  {"ParameterKey":"PrivateAppSubnet2Cidr","ParameterValue":"10.20.11.0/24"},
+  {"ParameterKey":"PrivateDbSubnet1Cidr","ParameterValue":"10.20.20.0/24"},
+  {"ParameterKey":"PrivateDbSubnet2Cidr","ParameterValue":"10.20.21.0/24"},
+  {"ParameterKey":"CertificateArn","ParameterValue":""},
+  {"ParameterKey":"RepositoryPrefix","ParameterValue":"prod"},
+  {"ParameterKey":"ImageTag","ParameterValue":"v1"},
+  {"ParameterKey":"EcsCpu","ParameterValue":"256"},
+  {"ParameterKey":"EcsMemory","ParameterValue":"512"},
+  {"ParameterKey":"ProductionDesiredCount","ParameterValue":"1"}
+]

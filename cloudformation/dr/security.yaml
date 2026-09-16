@@ -1,0 +1,49 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: On-demand DR security groups.
+
+Parameters:
+  ProjectName: {Type: String}
+  VpcId: {Type: AWS::EC2::VPC::Id}
+  ContainerPort: {Type: Number, Default: 8080}
+  DatabasePort: {Type: Number, Default: 5432}
+
+Resources:
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: DR public ALB
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - {IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0, Description: Public HTTP}
+        - {IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0, Description: Public HTTPS}
+      SecurityGroupEgress:
+        - {IpProtocol: tcp, FromPort: !Ref ContainerPort, ToPort: !Ref ContainerPort, DestinationSecurityGroupId: !Ref EcsSecurityGroup, Description: Forward only to ECS tasks}
+      Tags: [{Key: Name, Value: !Sub '${ProjectName}-dr-alb-sg'}]
+  EcsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: DR ECS tasks
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - {IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0, Description: AWS APIs through NAT}
+      Tags: [{Key: Name, Value: !Sub '${ProjectName}-dr-ecs-sg'}]
+  DbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Restored DR RDS
+      VpcId: !Ref VpcId
+      Tags: [{Key: Name, Value: !Sub '${ProjectName}-dr-db-sg'}]
+  AlbToEcsIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties: {GroupId: !Ref EcsSecurityGroup, IpProtocol: tcp, FromPort: !Ref ContainerPort, ToPort: !Ref ContainerPort, SourceSecurityGroupId: !Ref AlbSecurityGroup}
+  EcsToDbEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties: {GroupId: !Ref EcsSecurityGroup, IpProtocol: tcp, FromPort: !Ref DatabasePort, ToPort: !Ref DatabasePort, DestinationSecurityGroupId: !Ref DbSecurityGroup}
+  EcsToDbIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties: {GroupId: !Ref DbSecurityGroup, IpProtocol: tcp, FromPort: !Ref DatabasePort, ToPort: !Ref DatabasePort, SourceSecurityGroupId: !Ref EcsSecurityGroup}
+
+Outputs:
+  AlbSecurityGroupId: {Description: DR ALB security group., Value: !Ref AlbSecurityGroup}
+  EcsSecurityGroupId: {Description: DR ECS security group., Value: !Ref EcsSecurityGroup}
+  DbSecurityGroupId: {Description: DR RDS security group., Value: !Ref DbSecurityGroup}

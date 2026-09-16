@@ -1,0 +1,40 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Sydney rule forwarding one exact CloudWatch alarm event to the Singapore event bus.
+
+Parameters:
+  ProjectName: {Type: String}
+  PrimaryAlarmName: {Type: String}
+  DrEventBusArn: {Type: String}
+
+Resources:
+  ForwardRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement: [{Effect: Allow, Principal: {Service: events.amazonaws.com}, Action: sts:AssumeRole}]
+      Policies:
+        - PolicyName: PutOnlyToDrBus
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement: [{Effect: Allow, Action: events:PutEvents, Resource: !Ref DrEventBusArn}]
+
+  PrimaryAlarmForwarder:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${ProjectName}-forward-primary-alarm-to-dr'
+      State: ENABLED
+      EventPattern:
+        source: [aws.cloudwatch]
+        detail-type: [CloudWatch Alarm State Change]
+        detail:
+          alarmName: [!Ref PrimaryAlarmName]
+          state:
+            value: [ALARM]
+      Targets:
+        - Id: DrRegionEventBus
+          Arn: !Ref DrEventBusArn
+          RoleArn: !GetAtt ForwardRole.Arn
+
+Outputs:
+  RuleArn: {Description: Primary cross-Region forwarding rule ARN., Value: !GetAtt PrimaryAlarmForwarder.Arn}

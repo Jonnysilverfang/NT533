@@ -1,0 +1,87 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: AWS Backup plan protecting primary RDS and copying recovery points to Singapore.
+
+Parameters:
+  ProjectName:
+    Type: String
+  PrimaryVaultName:
+    Type: String
+  DrVaultArn:
+    Type: String
+  DatabaseArn:
+    Type: String
+  BackupSchedule:
+    Type: String
+    Default: 'cron(0 0/6 ? * * *)'
+  RetentionDays:
+    Type: Number
+    Default: 7
+    MinValue: 2
+
+Resources:
+  BackupServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: backup.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForBackup'
+      Policies:
+        - PolicyName: CrossRegionCopyKms
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - kms:CreateGrant
+                  - kms:DescribeKey
+                  - kms:Decrypt
+                  - kms:GenerateDataKey
+                Resource: '*'
+                Condition:
+                  Bool:
+                    kms:GrantIsForAWSResource: true
+
+  BackupPlan:
+    Type: AWS::Backup::BackupPlan
+    Properties:
+      BackupPlan:
+        BackupPlanName: !Sub '${ProjectName}-rds-plan'
+        BackupPlanRule:
+          - RuleName: six-hour-rds-copy-to-dr
+            TargetBackupVault: !Ref PrimaryVaultName
+            ScheduleExpression: !Ref BackupSchedule
+            StartWindowMinutes: 60
+            CompletionWindowMinutes: 360
+            Lifecycle:
+              DeleteAfterDays: !Ref RetentionDays
+            CopyActions:
+              - DestinationBackupVaultArn: !Ref DrVaultArn
+                Lifecycle:
+                  DeleteAfterDays: !Ref RetentionDays
+      BackupPlanTags:
+        Environment: production
+        Project: multi-region-dr
+        ManagedBy: cloudformation
+
+  BackupSelection:
+    Type: AWS::Backup::BackupSelection
+    Properties:
+      BackupPlanId: !Ref BackupPlan
+      BackupSelection:
+        SelectionName: !Sub '${ProjectName}-primary-rds'
+        IamRoleArn: !GetAtt BackupServiceRole.Arn
+        Resources: [!Ref DatabaseArn]
+
+Outputs:
+  BackupPlanId:
+    Description: AWS Backup plan ID.
+    Value: !Ref BackupPlan
+  BackupServiceRoleArn:
+    Description: AWS Backup service role ARN.
+    Value: !GetAtt BackupServiceRole.Arn

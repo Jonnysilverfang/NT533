@@ -1,0 +1,10 @@
+.aws-sam/
+.cfn-package/
+packaged-*.yaml
+*.zip
+__pycache__/
+*.pyc
+.env
+
+# Never commit local parameter files that may later contain account-specific data.
+cloudformation/parameters/*.local.json

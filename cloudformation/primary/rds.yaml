@@ -1,0 +1,159 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Encrypted private PostgreSQL RDS instance and replicated credentials secret.
+
+Parameters:
+  ProjectName:
+    Type: String
+  Environment:
+    Type: String
+    AllowedValues: [production]
+  DrRegion:
+    Type: String
+    Default: ap-southeast-1
+    AllowedValues: [ap-southeast-1]
+  DbSubnetGroupName:
+    Type: String
+  DbSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  DbName:
+    Type: String
+    Default: appdb
+    AllowedPattern: '^[a-zA-Z][a-zA-Z0-9]{0,62}$'
+  DbInstanceClass:
+    Type: String
+    Default: db.t4g.micro
+  AllocatedStorage:
+    Type: Number
+    Default: 20
+    MinValue: 20
+  BackupRetentionDays:
+    Type: Number
+    Default: 7
+    MinValue: 1
+    MaxValue: 35
+  MultiAZ:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+  DeletionProtection:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+Conditions:
+  IsMultiAz: !Equals [!Ref MultiAZ, 'true']
+  ProtectDatabase: !Equals [!Ref DeletionProtection, 'true']
+
+Resources:
+  DatabaseKey:
+    Type: AWS::KMS::Key
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: !Sub '${ProjectName} primary RDS encryption key'
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: EnableAccountAdministration
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+
+  DatabaseKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub 'alias/${ProjectName}-primary-rds'
+      TargetKeyId: !Ref DatabaseKey
+
+  DatabaseSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Sub '${ProjectName}-${Environment}-db-credentials'
+      Description: Primary DB credentials replicated to DR as recovery input.
+      KmsKeyId: alias/aws/secretsmanager
+      GenerateSecretString:
+        SecretStringTemplate: '{"username":"appadmin"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludeCharacters: '"@/\\'
+      ReplicaRegions:
+        - Region: !Ref DrRegion
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: multi-region-dr
+
+  DatabaseParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      Description: Enforce TLS for PostgreSQL connections
+      Family: postgres16
+      Parameters:
+        rds.force_ssl: '1'
+
+  Database:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub '${ProjectName}-primary-db'
+      Engine: postgres
+      DBName: !Ref DbName
+      DBInstanceClass: !Ref DbInstanceClass
+      AllocatedStorage: !Ref AllocatedStorage
+      StorageType: gp3
+      StorageEncrypted: true
+      KmsKeyId: !GetAtt DatabaseKey.Arn
+      MasterUsername: !Sub '{{resolve:secretsmanager:${DatabaseSecret}:SecretString:username}}'
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${DatabaseSecret}:SecretString:password}}'
+      DBSubnetGroupName: !Ref DbSubnetGroupName
+      VPCSecurityGroups: [!Ref DbSecurityGroupId]
+      DBParameterGroupName: !Ref DatabaseParameterGroup
+      PubliclyAccessible: false
+      MultiAZ: !If [IsMultiAz, true, false]
+      BackupRetentionPeriod: !Ref BackupRetentionDays
+      CopyTagsToSnapshot: true
+      AutoMinorVersionUpgrade: true
+      DeletionProtection: !If [ProtectDatabase, true, false]
+      EnableCloudwatchLogsExports: [postgresql, upgrade]
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-primary-db'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: multi-region-dr
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: RegionRole
+          Value: primary
+
+  SecretAttachment:
+    Type: AWS::SecretsManager::SecretTargetAttachment
+    Properties:
+      SecretId: !Ref DatabaseSecret
+      TargetId: !Ref Database
+      TargetType: AWS::RDS::DBInstance
+
+Outputs:
+  DatabaseArn:
+    Description: Primary RDS instance ARN.
+    Value: !Sub 'arn:${AWS::Partition}:rds:${AWS::Region}:${AWS::AccountId}:db:${Database}'
+  DatabaseIdentifier:
+    Description: Primary RDS instance identifier.
+    Value: !Ref Database
+  DatabaseEndpoint:
+    Description: Primary RDS endpoint address.
+    Value: !GetAtt Database.Endpoint.Address
+  DatabaseSecretArn:
+    Description: Primary credential secret ARN; a replica is maintained in DR.
+    Value: !Ref DatabaseSecret
+  DatabaseKmsKeyArn:
+    Description: Primary RDS customer-managed KMS key ARN.
+    Value: !GetAtt DatabaseKey.Arn

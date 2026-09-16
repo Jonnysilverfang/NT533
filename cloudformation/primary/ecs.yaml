@@ -1,0 +1,301 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Primary ECS Fargate cluster and three path-routed microservices.
+
+Parameters:
+  ProjectName:
+    Type: String
+  AppSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+  EcsSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  AuthTargetGroupArn:
+    Type: String
+  ProductTargetGroupArn:
+    Type: String
+  OrderTargetGroupArn:
+    Type: String
+  AuthRepositoryUri:
+    Type: String
+  ProductRepositoryUri:
+    Type: String
+  OrderRepositoryUri:
+    Type: String
+  ImageTag:
+    Type: String
+    Default: v1
+  DatabaseSecretArn:
+    Type: String
+  DatabaseEndpoint:
+    Type: String
+  DatabaseName:
+    Type: String
+    Default: appdb
+  ContainerPort:
+    Type: Number
+    Default: 8080
+  EcsCpu:
+    Type: String
+    Default: '256'
+    AllowedValues: ['256', '512', '1024']
+  EcsMemory:
+    Type: String
+    Default: '512'
+    AllowedValues: ['512', '1024', '2048']
+  DesiredCount:
+    Type: Number
+    Default: 0
+    MinValue: 0
+  LogRetentionDays:
+    Type: Number
+    Default: 30
+
+Resources:
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub '${ProjectName}-primary-ecs'
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
+      Policies:
+        - PolicyName: ReadDatabaseSecret
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref DatabaseSecretArn
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+
+  AuthLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/${ProjectName}-primary-auth'
+      RetentionInDays: !Ref LogRetentionDays
+  ProductLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/${ProjectName}-primary-product'
+      RetentionInDays: !Ref LogRetentionDays
+  OrderLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/${ProjectName}-primary-order'
+      RetentionInDays: !Ref LogRetentionDays
+
+  AuthTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${ProjectName}-primary-auth'
+      Cpu: !Ref EcsCpu
+      Memory: !Ref EcsMemory
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+      ContainerDefinitions:
+        - Name: auth
+          Image: !Sub '${AuthRepositoryUri}:${ImageTag}'
+          Essential: true
+          ReadonlyRootFilesystem: true
+          PortMappings:
+            - ContainerPort: !Ref ContainerPort
+              Protocol: tcp
+          Environment:
+            - Name: SERVICE_NAME
+              Value: auth
+            - Name: DB_HOST
+              Value: !Ref DatabaseEndpoint
+            - Name: DB_NAME
+              Value: !Ref DatabaseName
+          Secrets:
+            - Name: DB_USERNAME
+              ValueFrom: !Sub '${DatabaseSecretArn}:username::'
+            - Name: DB_PASSWORD
+              ValueFrom: !Sub '${DatabaseSecretArn}:password::'
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - >-
+                python -c "import urllib.request;
+                urllib.request.urlopen('http://127.0.0.1:8080/health')" || exit 1
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 20
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref AuthLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: auth
+              mode: blocking
+
+  ProductTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${ProjectName}-primary-product'
+      Cpu: !Ref EcsCpu
+      Memory: !Ref EcsMemory
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: product
+          Image: !Sub '${ProductRepositoryUri}:${ImageTag}'
+          Essential: true
+          ReadonlyRootFilesystem: true
+          PortMappings: [{ContainerPort: 8080, Protocol: tcp}]
+          Environment:
+            - {Name: SERVICE_NAME, Value: product}
+            - {Name: DB_HOST, Value: !Ref DatabaseEndpoint}
+            - {Name: DB_NAME, Value: !Ref DatabaseName}
+          Secrets:
+            - {Name: DB_USERNAME, ValueFrom: !Sub '${DatabaseSecretArn}:username::'}
+            - {Name: DB_PASSWORD, ValueFrom: !Sub '${DatabaseSecretArn}:password::'}
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref ProductLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: product
+              mode: blocking
+
+  OrderTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${ProjectName}-primary-order'
+      Cpu: !Ref EcsCpu
+      Memory: !Ref EcsMemory
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: order
+          Image: !Sub '${OrderRepositoryUri}:${ImageTag}'
+          Essential: true
+          ReadonlyRootFilesystem: true
+          PortMappings: [{ContainerPort: 8080, Protocol: tcp}]
+          Environment:
+            - {Name: SERVICE_NAME, Value: order}
+            - {Name: DB_HOST, Value: !Ref DatabaseEndpoint}
+            - {Name: DB_NAME, Value: !Ref DatabaseName}
+          Secrets:
+            - {Name: DB_USERNAME, ValueFrom: !Sub '${DatabaseSecretArn}:username::'}
+            - {Name: DB_PASSWORD, ValueFrom: !Sub '${DatabaseSecretArn}:password::'}
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref OrderLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: order
+              mode: blocking
+
+  AuthService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub '${ProjectName}-primary-auth'
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref AuthTaskDefinition
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+      PlatformVersion: LATEST
+      HealthCheckGracePeriodSeconds: 60
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+        DeploymentCircuitBreaker: {Enable: true, Rollback: true}
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups: [!Ref EcsSecurityGroupId]
+          Subnets: !Ref AppSubnetIds
+      LoadBalancers:
+        - ContainerName: auth
+          ContainerPort: !Ref ContainerPort
+          TargetGroupArn: !Ref AuthTargetGroupArn
+
+  ProductService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub '${ProjectName}-primary-product'
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref ProductTaskDefinition
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+      PlatformVersion: LATEST
+      HealthCheckGracePeriodSeconds: 60
+      DeploymentConfiguration:
+        DeploymentCircuitBreaker: {Enable: true, Rollback: true}
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups: [!Ref EcsSecurityGroupId]
+          Subnets: !Ref AppSubnetIds
+      LoadBalancers:
+        - {ContainerName: product, ContainerPort: 8080, TargetGroupArn: !Ref ProductTargetGroupArn}
+
+  OrderService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub '${ProjectName}-primary-order'
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref OrderTaskDefinition
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+      PlatformVersion: LATEST
+      HealthCheckGracePeriodSeconds: 60
+      DeploymentConfiguration:
+        DeploymentCircuitBreaker: {Enable: true, Rollback: true}
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups: [!Ref EcsSecurityGroupId]
+          Subnets: !Ref AppSubnetIds
+      LoadBalancers:
+        - {ContainerName: order, ContainerPort: 8080, TargetGroupArn: !Ref OrderTargetGroupArn}
+
+Outputs:
+  ClusterArn:
+    Description: Primary ECS cluster ARN.
+    Value: !GetAtt Cluster.Arn
+  ClusterName:
+    Description: Primary ECS cluster name.
+    Value: !Ref Cluster
+  AuthServiceArn:
+    Description: Auth ECS service ARN.
+    Value: !Ref AuthService
+  ProductServiceArn:
+    Description: Product ECS service ARN.
+    Value: !Ref ProductService
+  OrderServiceArn:
+    Description: Order ECS service ARN.
+    Value: !Ref OrderService

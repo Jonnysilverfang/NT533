@@ -1,0 +1,45 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Encrypted DR notification topic and optional email subscription.
+
+Parameters:
+  ProjectName: {Type: String}
+  NotificationEmail: {Type: String, Default: ''}
+
+Conditions:
+  HasEmail: !Not [!Equals [!Ref NotificationEmail, '']]
+
+Resources:
+  NotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${ProjectName}-notifications'
+      KmsMasterKeyId: alias/aws/sns
+      Tags:
+        - {Key: Environment, Value: production}
+        - {Key: Project, Value: multi-region-dr}
+  EmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasEmail
+    Properties:
+      TopicArn: !Ref NotificationTopic
+      Protocol: email
+      Endpoint: !Ref NotificationEmail
+
+  EventBridgePublishPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics: [!Ref NotificationTopic]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowAccountEventBridgeFailureNotifications
+            Effect: Allow
+            Principal: {Service: events.amazonaws.com}
+            Action: sns:Publish
+            Resource: !Ref NotificationTopic
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+
+Outputs:
+  TopicArn: {Description: Encrypted DR notification topic ARN., Value: !Ref NotificationTopic}

@@ -1,0 +1,71 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Primary ECR repositories and Sydney-to-Singapore registry replication.
+
+Parameters:
+  RepositoryPrefix:
+    Type: String
+    Default: prod
+    AllowedPattern: '^[a-z0-9]+(?:[._-][a-z0-9]+)*$'
+  DrRegion:
+    Type: String
+    Default: ap-southeast-1
+    AllowedValues: [ap-southeast-1]
+
+Resources:
+  AuthRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Sub '${RepositoryPrefix}-auth'
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      LifecyclePolicy:
+        LifecyclePolicyText: >-
+          {"rules":[{"rulePriority":1,"description":"Expire untagged images after 7 days","selection":{"tagStatus":"untagged","countType":"sinceImagePushed","countUnit":"days","countNumber":7},"action":{"type":"expire"}}]}
+
+  ProductRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Sub '${RepositoryPrefix}-product'
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration: {ScanOnPush: true}
+      EncryptionConfiguration: {EncryptionType: AES256}
+
+  OrderRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Sub '${RepositoryPrefix}-order'
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration: {ScanOnPush: true}
+      EncryptionConfiguration: {EncryptionType: AES256}
+
+  ReplicationConfiguration:
+    Type: AWS::ECR::ReplicationConfiguration
+    Properties:
+      ReplicationConfiguration:
+        Rules:
+          - Destinations:
+              - Region: !Ref DrRegion
+                RegistryId: !Ref AWS::AccountId
+            RepositoryFilters:
+              - Filter: !Sub '${RepositoryPrefix}-'
+                FilterType: PREFIX_MATCH
+
+Outputs:
+  AuthRepositoryUri:
+    Description: Auth repository URI.
+    Value: !GetAtt AuthRepository.RepositoryUri
+  ProductRepositoryUri:
+    Description: Product repository URI.
+    Value: !GetAtt ProductRepository.RepositoryUri
+  OrderRepositoryUri:
+    Description: Order repository URI.
+    Value: !GetAtt OrderRepository.RepositoryUri

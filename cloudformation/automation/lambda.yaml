@@ -1,0 +1,75 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Small single-purpose Lambda functions used by the DR workflow.
+
+Parameters:
+  ProjectName: {Type: String}
+  CheckPrimaryRoleArn: {Type: String}
+  FindRecoveryPointRoleArn: {Type: String}
+  StartRestoreRoleArn: {Type: String}
+  UpdateSecretRoleArn: {Type: String}
+  CheckAlbRoleArn: {Type: String}
+  ParseStackOutputsRoleArn: {Type: String}
+
+Resources:
+  CheckPrimaryFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-production-dr-check-primary'
+      Runtime: python3.13
+      Handler: index.handler
+      Role: !Ref CheckPrimaryRoleArn
+      Timeout: 30
+      Code: lambda/check-primary/
+  FindRecoveryPointFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-production-dr-find-recovery-point'
+      Runtime: python3.13
+      Handler: index.handler
+      Role: !Ref FindRecoveryPointRoleArn
+      Timeout: 60
+      Code: lambda/find-recovery-point/
+  StartRestoreFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-production-dr-start-restore'
+      Runtime: python3.13
+      Handler: index.handler
+      Role: !Ref StartRestoreRoleArn
+      Timeout: 60
+      Code: lambda/start-restore/
+  UpdateSecretFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-production-dr-update-secret'
+      Runtime: python3.13
+      Handler: index.handler
+      Role: !Ref UpdateSecretRoleArn
+      Timeout: 30
+      Code: lambda/update-secret/
+  CheckAlbFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-production-dr-check-alb'
+      Runtime: python3.13
+      Handler: index.handler
+      Role: !Ref CheckAlbRoleArn
+      Timeout: 30
+      Code: lambda/check-alb/
+  ParseStackOutputsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-production-dr-parse-stack-outputs'
+      Runtime: python3.13
+      Handler: index.handler
+      Role: !Ref ParseStackOutputsRoleArn
+      Timeout: 10
+      Code: lambda/parse-stack-outputs/
+
+Outputs:
+  CheckPrimaryFunctionArn: {Description: Check-primary function ARN., Value: !GetAtt CheckPrimaryFunction.Arn}
+  FindRecoveryPointFunctionArn: {Description: Find-recovery-point function ARN., Value: !GetAtt FindRecoveryPointFunction.Arn}
+  StartRestoreFunctionArn: {Description: Start-restore function ARN., Value: !GetAtt StartRestoreFunction.Arn}
+  UpdateSecretFunctionArn: {Description: Update-secret function ARN., Value: !GetAtt UpdateSecretFunction.Arn}
+  CheckAlbFunctionArn: {Description: Check-ALB function ARN., Value: !GetAtt CheckAlbFunction.Arn}
+  ParseStackOutputsFunctionArn: {Description: Parse-stack-outputs function ARN., Value: !GetAtt ParseStackOutputsFunction.Arn}

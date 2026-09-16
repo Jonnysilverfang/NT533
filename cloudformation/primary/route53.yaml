@@ -1,0 +1,55 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Primary failover alias and independent endpoint health check for DR detection.
+
+Parameters:
+  HostedZoneId:
+    Type: AWS::Route53::HostedZone::Id
+  DomainName:
+    Type: String
+  LoadBalancerDnsName:
+    Type: String
+  LoadBalancerCanonicalHostedZoneId:
+    Type: String
+  HealthCheckProtocol:
+    Type: String
+    Default: HTTP
+    AllowedValues: [HTTP, HTTPS]
+  HealthCheckPort:
+    Type: Number
+    Default: 80
+
+Resources:
+  PrimaryRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref DomainName
+      Type: A
+      SetIdentifier: primary-sydney
+      Failover: PRIMARY
+      AliasTarget:
+        DNSName: !Ref LoadBalancerDnsName
+        HostedZoneId: !Ref LoadBalancerCanonicalHostedZoneId
+        EvaluateTargetHealth: true
+
+  PrimaryEndpointHealthCheck:
+    Type: AWS::Route53::HealthCheck
+    Properties:
+      HealthCheckConfig:
+        Type: !Ref HealthCheckProtocol
+        FullyQualifiedDomainName: !Ref LoadBalancerDnsName
+        Port: !Ref HealthCheckPort
+        ResourcePath: /health
+        RequestInterval: 30
+        FailureThreshold: 3
+      HealthCheckTags:
+        - Key: Name
+          Value: primary-application-health
+
+Outputs:
+  PrimaryRecordName:
+    Description: Application DNS record name.
+    Value: !Ref DomainName
+  Route53HealthCheckId:
+    Description: Independent health check ID used for monitoring.
+    Value: !Ref PrimaryEndpointHealthCheck

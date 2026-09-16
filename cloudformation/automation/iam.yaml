@@ -1,0 +1,277 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Least-privilege roles for DR orchestration, Lambdas, restore and CloudFormation.
+
+Parameters:
+  ProjectName: {Type: String}
+  DrBackupVaultArn: {Type: String}
+  NotificationTopicArn: {Type: String}
+  ArtifactBucketArn: {Type: String}
+  SourceCredentialSecretName: {Type: String}
+  HostedZoneId: {Type: String}
+
+Resources:
+  CheckPrimaryRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement: [{Effect: Allow, Principal: {Service: lambda.amazonaws.com}, Action: sts:AssumeRole}]
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: ReadPrimaryAlarm
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement: [{Effect: Allow, Action: cloudwatch:DescribeAlarms, Resource: '*'}]
+
+  FindRecoveryPointRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement: [{Effect: Allow, Principal: {Service: lambda.amazonaws.com}, Action: sts:AssumeRole}]
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: ListRecoveryPoints
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement: [{Effect: Allow, Action: backup:ListRecoveryPointsByBackupVault, Resource: !Ref DrBackupVaultArn}]
+
+  BackupRestoreRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement: [{Effect: Allow, Principal: {Service: backup.amazonaws.com}, Action: sts:AssumeRole}]
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForRestores'
+
+  StartRestoreRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement: [{Effect: Allow, Principal: {Service: lambda.amazonaws.com}, Action: sts:AssumeRole}]
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: StartRestore
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [backup:GetRecoveryPointRestoreMetadata, backup:StartRestoreJob]
+                Resource: '*'
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt BackupRestoreRole.Arn
+                Condition: {StringEquals: {iam:PassedToService: backup.amazonaws.com}}
+
+  UpdateSecretRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement: [{Effect: Allow, Principal: {Service: lambda.amazonaws.com}, Action: sts:AssumeRole}]
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: UpdateRuntimeSecret
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - {Effect: Allow, Action: rds:DescribeDBInstances, Resource: '*'}
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${SourceCredentialSecretName}-*'
+              - Effect: Allow
+                Action: secretsmanager:PutSecretValue
+                Resource: !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${ProjectName}-production-dr-runtime-*'
+
+  CheckAlbRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement: [{Effect: Allow, Principal: {Service: lambda.amazonaws.com}, Action: sts:AssumeRole}]
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: CheckTargetHealth
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement: [{Effect: Allow, Action: elasticloadbalancing:DescribeTargetHealth, Resource: '*'}]
+
+  ParseStackOutputsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement: [{Effect: Allow, Principal: {Service: lambda.amazonaws.com}, Action: sts:AssumeRole}]
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+
+  CloudFormationExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement: [{Effect: Allow, Principal: {Service: cloudformation.amazonaws.com}, Action: sts:AssumeRole}]
+      Policies:
+        - PolicyName: BuildDrRuntime
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:AllocateAddress
+                  - ec2:AssociateRouteTable
+                  - ec2:AttachInternetGateway
+                  - ec2:AuthorizeSecurityGroupEgress
+                  - ec2:AuthorizeSecurityGroupIngress
+                  - ec2:CreateInternetGateway
+                  - ec2:CreateNatGateway
+                  - ec2:CreateRoute
+                  - ec2:CreateRouteTable
+                  - ec2:CreateSecurityGroup
+                  - ec2:CreateSubnet
+                  - ec2:CreateTags
+                  - ec2:CreateVpc
+                  - ec2:DeleteInternetGateway
+                  - ec2:DeleteNatGateway
+                  - ec2:DeleteRoute
+                  - ec2:DeleteRouteTable
+                  - ec2:DeleteSecurityGroup
+                  - ec2:DeleteSubnet
+                  - ec2:DeleteVpc
+                  - ec2:Describe*
+                  - ec2:DetachInternetGateway
+                  - ec2:DisassociateRouteTable
+                  - ec2:ModifySubnetAttribute
+                  - ec2:ModifyVpcAttribute
+                  - ec2:ReleaseAddress
+                  - ec2:RevokeSecurityGroupEgress
+                  - ec2:RevokeSecurityGroupIngress
+                  - elasticloadbalancing:CreateLoadBalancer
+                  - elasticloadbalancing:CreateListener
+                  - elasticloadbalancing:CreateRule
+                  - elasticloadbalancing:CreateTargetGroup
+                  - elasticloadbalancing:AddTags
+                  - elasticloadbalancing:DeleteLoadBalancer
+                  - elasticloadbalancing:DeleteListener
+                  - elasticloadbalancing:DeleteRule
+                  - elasticloadbalancing:DeleteTargetGroup
+                  - elasticloadbalancing:Describe*
+                  - elasticloadbalancing:ModifyLoadBalancerAttributes
+                  - elasticloadbalancing:ModifyTargetGroup
+                  - elasticloadbalancing:ModifyTargetGroupAttributes
+                  - elasticloadbalancing:RemoveTags
+                  - elasticloadbalancing:SetSecurityGroups
+                  - elasticloadbalancing:SetSubnets
+                  - ecs:CreateCluster
+                  - ecs:CreateService
+                  - ecs:DeleteCluster
+                  - ecs:DeleteService
+                  - ecs:DeregisterTaskDefinition
+                  - ecs:Describe*
+                  - ecs:RegisterTaskDefinition
+                  - ecs:TagResource
+                  - ecs:UntagResource
+                  - ecs:UpdateService
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:DeleteRolePolicy
+                  - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:PutRolePolicy
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - logs:CreateLogGroup
+                  - logs:DeleteLogGroup
+                  - logs:PutRetentionPolicy
+                  - logs:TagResource
+                  - logs:UntagResource
+                  - rds:AddTagsToResource
+                  - rds:CreateDBSubnetGroup
+                  - rds:DeleteDBSubnetGroup
+                  - rds:DescribeDBSubnetGroups
+                  - secretsmanager:CreateSecret
+                  - secretsmanager:DeleteSecret
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:GetResourcePolicy
+                  - secretsmanager:PutSecretValue
+                  - secretsmanager:TagResource
+                  - secretsmanager:UntagResource
+                  - cloudwatch:DeleteDashboards
+                  - cloudwatch:PutDashboard
+                Resource: '*'
+              - Sid: ManageNestedRuntimeStacks
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateStack
+                  - cloudformation:DeleteStack
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStackResource
+                  - cloudformation:DescribeStacks
+                  - cloudformation:GetTemplate
+                  - cloudformation:ListStackResources
+                  - cloudformation:UpdateStack
+                Resource: !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-runtime-*/*'
+              - Sid: PassRuntimeRolesToEcsTasks
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ProjectName}-runtime-*'
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: ecs-tasks.amazonaws.com
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub '${ArtifactBucketArn}/*'
+
+  OrchestratorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement: [{Effect: Allow, Principal: {Service: states.amazonaws.com}, Action: sts:AssumeRole}]
+      Policies:
+        - PolicyName: DrWorkflow
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-production-dr-*'
+              - Effect: Allow
+                Action: [cloudformation:CreateStack, cloudformation:DescribeStacks]
+                Resource: !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-runtime-*/*'
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt CloudFormationExecutionRole.Arn
+                Condition: {StringEquals: {iam:PassedToService: cloudformation.amazonaws.com}}
+              - {Effect: Allow, Action: backup:DescribeRestoreJob, Resource: '*'}
+              - {Effect: Allow, Action: rds:DescribeDBInstances, Resource: '*'}
+              - Effect: Allow
+                Action: [ecs:UpdateService, ecs:DescribeServices]
+                Resource: '*'
+              - Effect: Allow
+                Action: route53:ChangeResourceRecordSets
+                Resource: !Sub 'arn:${AWS::Partition}:route53:::hostedzone/${HostedZoneId}'
+              - {Effect: Allow, Action: sns:Publish, Resource: !Ref NotificationTopicArn}
+              - Effect: Allow
+                Action: [logs:CreateLogDelivery, logs:GetLogDelivery, logs:UpdateLogDelivery, logs:DeleteLogDelivery, logs:ListLogDeliveries, logs:PutResourcePolicy, logs:DescribeResourcePolicies, logs:DescribeLogGroups]
+                Resource: '*'
+
+Outputs:
+  CheckPrimaryRoleArn: {Description: Check-primary Lambda role., Value: !GetAtt CheckPrimaryRole.Arn}
+  FindRecoveryPointRoleArn: {Description: Recovery-point Lambda role., Value: !GetAtt FindRecoveryPointRole.Arn}
+  StartRestoreRoleArn: {Description: Start-restore Lambda role., Value: !GetAtt StartRestoreRole.Arn}
+  UpdateSecretRoleArn: {Description: Runtime-secret Lambda role., Value: !GetAtt UpdateSecretRole.Arn}
+  CheckAlbRoleArn: {Description: ALB-check Lambda role., Value: !GetAtt CheckAlbRole.Arn}
+  ParseStackOutputsRoleArn: {Description: Stack-output parser Lambda role., Value: !GetAtt ParseStackOutputsRole.Arn}
+  BackupRestoreRoleArn: {Description: Role assumed by AWS Backup restore job., Value: !GetAtt BackupRestoreRole.Arn}
+  CloudFormationExecutionRoleArn: {Description: DR runtime stack execution role., Value: !GetAtt CloudFormationExecutionRole.Arn}
+  OrchestratorRoleArn: {Description: Step Functions execution role., Value: !GetAtt OrchestratorRole.Arn}

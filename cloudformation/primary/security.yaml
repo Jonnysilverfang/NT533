@@ -1,0 +1,106 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Least-privilege primary security groups for ALB, ECS and RDS.
+
+Parameters:
+  ProjectName:
+    Type: String
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  ContainerPort:
+    Type: Number
+    Default: 8080
+  DatabasePort:
+    Type: Number
+    Default: 5432
+
+Resources:
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Public HTTP and HTTPS to primary ALB
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: Public HTTP
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: Public HTTPS
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: !Ref ContainerPort
+          ToPort: !Ref ContainerPort
+          DestinationSecurityGroupId: !Ref EcsSecurityGroup
+          Description: Forward only to ECS tasks
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-primary-alb-sg'
+
+  EcsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Primary ECS tasks
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: AWS APIs and ECR through NAT
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-primary-ecs-sg'
+
+  DbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Primary RDS PostgreSQL from ECS only
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-primary-db-sg'
+
+  AlbToEcsIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref EcsSecurityGroup
+      IpProtocol: tcp
+      FromPort: !Ref ContainerPort
+      ToPort: !Ref ContainerPort
+      SourceSecurityGroupId: !Ref AlbSecurityGroup
+      Description: Application traffic from ALB only
+
+  EcsToDbEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref EcsSecurityGroup
+      IpProtocol: tcp
+      FromPort: !Ref DatabasePort
+      ToPort: !Ref DatabasePort
+      DestinationSecurityGroupId: !Ref DbSecurityGroup
+      Description: PostgreSQL to RDS only
+
+  EcsToDbIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref DbSecurityGroup
+      IpProtocol: tcp
+      FromPort: !Ref DatabasePort
+      ToPort: !Ref DatabasePort
+      SourceSecurityGroupId: !Ref EcsSecurityGroup
+      Description: PostgreSQL from ECS tasks only
+
+Outputs:
+  AlbSecurityGroupId:
+    Description: Primary ALB security group ID.
+    Value: !Ref AlbSecurityGroup
+  EcsSecurityGroupId:
+    Description: Primary ECS task security group ID.
+    Value: !Ref EcsSecurityGroup
+  DbSecurityGroupId:
+    Description: Primary RDS security group ID.
+    Value: !Ref DbSecurityGroup

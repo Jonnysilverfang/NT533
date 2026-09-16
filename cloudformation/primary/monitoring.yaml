@@ -1,0 +1,64 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Primary availability alarm and operational dashboard.
+
+Parameters:
+  ProjectName:
+    Type: String
+  LoadBalancerFullName:
+    Type: String
+  AuthTargetGroupFullName:
+    Type: String
+  ClusterName:
+    Type: String
+  DatabaseIdentifier:
+    Type: String
+  Route53HealthCheckId:
+    Type: String
+  PrimaryVaultName:
+    Type: String
+
+Resources:
+  PrimaryUnavailableAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-primary-application-unavailable'
+      AlarmDescription: Auth target group has no healthy hosts for 3 of 5 minutes.
+      Namespace: AWS/ApplicationELB
+      MetricName: HealthyHostCount
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !Ref LoadBalancerFullName
+        - Name: TargetGroup
+          Value: !Ref AuthTargetGroupFullName
+      Statistic: Minimum
+      Period: 60
+      EvaluationPeriods: 5
+      DatapointsToAlarm: 3
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+
+  Dashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub '${ProjectName}-production'
+      DashboardBody: !Sub |
+        {
+          "start":"-PT8H",
+          "periodOverride":"inherit",
+          "widgets":[
+            {"type":"alarm","x":0,"y":0,"width":24,"height":6,"properties":{"title":"Primary availability","alarms":["${PrimaryUnavailableAlarm.Arn}"]}},
+            {"type":"metric","x":0,"y":6,"width":12,"height":6,"properties":{"title":"ALB requests and target 5xx","region":"${AWS::Region}","metrics":[["AWS/ApplicationELB","RequestCount","LoadBalancer","${LoadBalancerFullName}"],[".","HTTPCode_Target_5XX_Count",".","."]],"period":60,"stat":"Sum"}},
+            {"type":"metric","x":12,"y":6,"width":12,"height":6,"properties":{"title":"ECS running tasks","region":"${AWS::Region}","metrics":[["ECS/ContainerInsights","RunningTaskCount","ClusterName","${ClusterName}"], ["AWS/RDS","DatabaseConnections","DBInstanceIdentifier","${DatabaseIdentifier}"]],"period":60}},
+            {"type":"metric","x":0,"y":12,"width":12,"height":6,"properties":{"title":"Route 53 health","region":"us-east-1","metrics":[["AWS/Route53","HealthCheckStatus","HealthCheckId","${Route53HealthCheckId}"]],"period":60,"stat":"Minimum"}},
+            {"type":"metric","x":12,"y":12,"width":12,"height":6,"properties":{"title":"AWS Backup failures","region":"${AWS::Region}","metrics":[["AWS/Backup","NumberOfBackupJobsFailed","BackupVaultName","${PrimaryVaultName}"]],"period":300,"stat":"Sum"}}
+          ]
+        }
+
+Outputs:
+  PrimaryUnavailableAlarmName:
+    Description: Alarm name forwarded to the DR EventBridge bus.
+    Value: !Ref PrimaryUnavailableAlarm
+  DashboardName:
+    Description: Production dashboard name.
+    Value: !Ref Dashboard

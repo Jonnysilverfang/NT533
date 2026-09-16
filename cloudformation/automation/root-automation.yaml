@@ -1,0 +1,99 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Singapore DR automation baseline using nested stacks.
+
+Parameters:
+  ProjectName: {Type: String, Default: prod-dr}
+  PrimaryRegion: {Type: String, Default: ap-southeast-2}
+  PrimaryAlarmName: {Type: String}
+  NotificationEmail: {Type: String, Default: ''}
+  DrBackupVaultArn: {Type: String}
+  DrBackupVaultName: {Type: String, Default: prod-dr-backup-vault}
+  ArtifactBucketArn: {Type: String}
+  DrRuntimeTemplateUrl: {Type: String}
+  SourceCredentialSecretName: {Type: String}
+  HostedZoneId: {Type: String}
+  DomainName: {Type: String}
+  DbInstanceClass: {Type: String, Default: db.t4g.micro}
+  DrCertificateArn: {Type: String, Default: ''}
+  RepositoryPrefix: {Type: String, Default: prod}
+  ImageTag: {Type: String, Default: v1}
+  ProductionDesiredCount: {Type: Number, Default: 1}
+
+Resources:
+  SnsStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./sns.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        NotificationEmail: !Ref NotificationEmail
+
+  IamStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./iam.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        DrBackupVaultArn: !Ref DrBackupVaultArn
+        NotificationTopicArn: !GetAtt SnsStack.Outputs.TopicArn
+        ArtifactBucketArn: !Ref ArtifactBucketArn
+        SourceCredentialSecretName: !Ref SourceCredentialSecretName
+        HostedZoneId: !Ref HostedZoneId
+
+  LambdaStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./lambda.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        CheckPrimaryRoleArn: !GetAtt IamStack.Outputs.CheckPrimaryRoleArn
+        FindRecoveryPointRoleArn: !GetAtt IamStack.Outputs.FindRecoveryPointRoleArn
+        StartRestoreRoleArn: !GetAtt IamStack.Outputs.StartRestoreRoleArn
+        UpdateSecretRoleArn: !GetAtt IamStack.Outputs.UpdateSecretRoleArn
+        CheckAlbRoleArn: !GetAtt IamStack.Outputs.CheckAlbRoleArn
+        ParseStackOutputsRoleArn: !GetAtt IamStack.Outputs.ParseStackOutputsRoleArn
+
+  StepFunctionsStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./stepfunctions.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        StateMachineRoleArn: !GetAtt IamStack.Outputs.OrchestratorRoleArn
+        NotificationTopicArn: !GetAtt SnsStack.Outputs.TopicArn
+        CheckPrimaryFunctionArn: !GetAtt LambdaStack.Outputs.CheckPrimaryFunctionArn
+        FindRecoveryPointFunctionArn: !GetAtt LambdaStack.Outputs.FindRecoveryPointFunctionArn
+        StartRestoreFunctionArn: !GetAtt LambdaStack.Outputs.StartRestoreFunctionArn
+        UpdateSecretFunctionArn: !GetAtt LambdaStack.Outputs.UpdateSecretFunctionArn
+        CheckAlbFunctionArn: !GetAtt LambdaStack.Outputs.CheckAlbFunctionArn
+        ParseStackOutputsFunctionArn: !GetAtt LambdaStack.Outputs.ParseStackOutputsFunctionArn
+        CloudFormationExecutionRoleArn: !GetAtt IamStack.Outputs.CloudFormationExecutionRoleArn
+        BackupRestoreRoleArn: !GetAtt IamStack.Outputs.BackupRestoreRoleArn
+        DrRuntimeTemplateUrl: !Ref DrRuntimeTemplateUrl
+        PrimaryRegion: !Ref PrimaryRegion
+        PrimaryAlarmName: !Ref PrimaryAlarmName
+        DrBackupVaultName: !Ref DrBackupVaultName
+        SourceCredentialSecretId: !Ref SourceCredentialSecretName
+        DbInstanceClass: !Ref DbInstanceClass
+        HostedZoneId: !Ref HostedZoneId
+        DomainName: !Ref DomainName
+        DrCertificateArn: !Ref DrCertificateArn
+        RepositoryPrefix: !Ref RepositoryPrefix
+        ImageTag: !Ref ImageTag
+        ProductionDesiredCount: !Ref ProductionDesiredCount
+
+  EventBridgeStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./eventbridge-dr.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        PrimaryRegion: !Ref PrimaryRegion
+        PrimaryAlarmName: !Ref PrimaryAlarmName
+        StateMachineArn: !GetAtt StepFunctionsStack.Outputs.StateMachineArn
+        NotificationTopicArn: !GetAtt SnsStack.Outputs.TopicArn
+
+Outputs:
+  StateMachineArn: {Description: DR orchestrator ARN., Value: !GetAtt StepFunctionsStack.Outputs.StateMachineArn}
+  NotificationTopicArn: {Description: DR SNS topic ARN., Value: !GetAtt SnsStack.Outputs.TopicArn}
+  DrEventBusArn: {Description: Singapore event bus ARN for Sydney forwarder., Value: !GetAtt EventBridgeStack.Outputs.DrEventBusArn}

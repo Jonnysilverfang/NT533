@@ -1,0 +1,237 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Production primary root stack for Sydney using nested CloudFormation stacks.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: prod-dr
+    AllowedPattern: '^[a-z][a-z0-9-]{2,20}$'
+  Environment:
+    Type: String
+    Default: production
+    AllowedValues: [production]
+  DrRegion:
+    Type: String
+    Default: ap-southeast-1
+    AllowedValues: [ap-southeast-1]
+  VpcCidr:
+    Type: String
+    Default: 10.10.0.0/16
+  PublicSubnet1Cidr:
+    Type: String
+    Default: 10.10.0.0/24
+  PublicSubnet2Cidr:
+    Type: String
+    Default: 10.10.1.0/24
+  PrivateAppSubnet1Cidr:
+    Type: String
+    Default: 10.10.10.0/24
+  PrivateAppSubnet2Cidr:
+    Type: String
+    Default: 10.10.11.0/24
+  PrivateDbSubnet1Cidr:
+    Type: String
+    Default: 10.10.20.0/24
+  PrivateDbSubnet2Cidr:
+    Type: String
+    Default: 10.10.21.0/24
+  ContainerPort:
+    Type: Number
+    Default: 8080
+  DbName:
+    Type: String
+    Default: appdb
+  DbInstanceClass:
+    Type: String
+    Default: db.t4g.micro
+  EcsCpu:
+    Type: String
+    Default: '256'
+  EcsMemory:
+    Type: String
+    Default: '512'
+  EcsDesiredCount:
+    Type: Number
+    Default: 0
+  ImageTag:
+    Type: String
+    Default: v1
+  RepositoryPrefix:
+    Type: String
+    Default: prod
+  PrimaryBackupVaultName:
+    Type: String
+    Default: prod-primary-backup-vault
+  DrBackupVaultArn:
+    Type: String
+  BackupSchedule:
+    Type: String
+    Default: 'cron(0 0/6 ? * * *)'
+  BackupRetentionDays:
+    Type: Number
+    Default: 7
+  HostedZoneId:
+    Type: AWS::Route53::HostedZone::Id
+  DomainName:
+    Type: String
+  CertificateArn:
+    Type: String
+    Default: ''
+  HealthCheckProtocol:
+    Type: String
+    Default: HTTP
+    AllowedValues: [HTTP, HTTPS]
+  HealthCheckPort:
+    Type: Number
+    Default: 80
+  EnableDeletionProtection:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+Resources:
+  NetworkStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./network.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        Environment: !Ref Environment
+        VpcCidr: !Ref VpcCidr
+        PublicSubnet1Cidr: !Ref PublicSubnet1Cidr
+        PublicSubnet2Cidr: !Ref PublicSubnet2Cidr
+        PrivateAppSubnet1Cidr: !Ref PrivateAppSubnet1Cidr
+        PrivateAppSubnet2Cidr: !Ref PrivateAppSubnet2Cidr
+        PrivateDbSubnet1Cidr: !Ref PrivateDbSubnet1Cidr
+        PrivateDbSubnet2Cidr: !Ref PrivateDbSubnet2Cidr
+
+  SecurityStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./security.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        VpcId: !GetAtt NetworkStack.Outputs.VpcId
+        ContainerPort: !Ref ContainerPort
+
+  AlbStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./alb.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        VpcId: !GetAtt NetworkStack.Outputs.VpcId
+        PublicSubnetIds: !GetAtt NetworkStack.Outputs.PublicSubnetIds
+        AlbSecurityGroupId: !GetAtt SecurityStack.Outputs.AlbSecurityGroupId
+        ContainerPort: !Ref ContainerPort
+        CertificateArn: !Ref CertificateArn
+        EnableDeletionProtection: !Ref EnableDeletionProtection
+
+  RdsStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./rds.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        Environment: !Ref Environment
+        DrRegion: !Ref DrRegion
+        DbSubnetGroupName: !GetAtt NetworkStack.Outputs.DbSubnetGroupName
+        DbSecurityGroupId: !GetAtt SecurityStack.Outputs.DbSecurityGroupId
+        DbName: !Ref DbName
+        DbInstanceClass: !Ref DbInstanceClass
+        BackupRetentionDays: !Ref BackupRetentionDays
+        DeletionProtection: !Ref EnableDeletionProtection
+
+  EcrStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./ecr.yaml
+      Parameters:
+        RepositoryPrefix: !Ref RepositoryPrefix
+        DrRegion: !Ref DrRegion
+
+  EcsStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./ecs.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        AppSubnetIds: !GetAtt NetworkStack.Outputs.AppSubnetIds
+        EcsSecurityGroupId: !GetAtt SecurityStack.Outputs.EcsSecurityGroupId
+        AuthTargetGroupArn: !GetAtt AlbStack.Outputs.AuthTargetGroupArn
+        ProductTargetGroupArn: !GetAtt AlbStack.Outputs.ProductTargetGroupArn
+        OrderTargetGroupArn: !GetAtt AlbStack.Outputs.OrderTargetGroupArn
+        AuthRepositoryUri: !GetAtt EcrStack.Outputs.AuthRepositoryUri
+        ProductRepositoryUri: !GetAtt EcrStack.Outputs.ProductRepositoryUri
+        OrderRepositoryUri: !GetAtt EcrStack.Outputs.OrderRepositoryUri
+        ImageTag: !Ref ImageTag
+        DatabaseSecretArn: !GetAtt RdsStack.Outputs.DatabaseSecretArn
+        DatabaseEndpoint: !GetAtt RdsStack.Outputs.DatabaseEndpoint
+        DatabaseName: !Ref DbName
+        ContainerPort: !Ref ContainerPort
+        EcsCpu: !Ref EcsCpu
+        EcsMemory: !Ref EcsMemory
+        DesiredCount: !Ref EcsDesiredCount
+
+  BackupStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./backup.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        PrimaryVaultName: !Ref PrimaryBackupVaultName
+        DrVaultArn: !Ref DrBackupVaultArn
+        DatabaseArn: !GetAtt RdsStack.Outputs.DatabaseArn
+        BackupSchedule: !Ref BackupSchedule
+        RetentionDays: !Ref BackupRetentionDays
+
+  Route53Stack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./route53.yaml
+      Parameters:
+        HostedZoneId: !Ref HostedZoneId
+        DomainName: !Ref DomainName
+        LoadBalancerDnsName: !GetAtt AlbStack.Outputs.LoadBalancerDnsName
+        LoadBalancerCanonicalHostedZoneId: !GetAtt AlbStack.Outputs.LoadBalancerCanonicalHostedZoneId
+        HealthCheckProtocol: !Ref HealthCheckProtocol
+        HealthCheckPort: !Ref HealthCheckPort
+
+  MonitoringStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./monitoring.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        LoadBalancerFullName: !GetAtt AlbStack.Outputs.LoadBalancerFullName
+        AuthTargetGroupFullName: !GetAtt AlbStack.Outputs.AuthTargetGroupFullName
+        ClusterName: !GetAtt EcsStack.Outputs.ClusterName
+        DatabaseIdentifier: !GetAtt RdsStack.Outputs.DatabaseIdentifier
+        Route53HealthCheckId: !GetAtt Route53Stack.Outputs.Route53HealthCheckId
+        PrimaryVaultName: !Ref PrimaryBackupVaultName
+
+Outputs:
+  VpcId:
+    Description: Primary VPC ID.
+    Value: !GetAtt NetworkStack.Outputs.VpcId
+  PrimaryAlbDnsName:
+    Description: Primary ALB DNS name.
+    Value: !GetAtt AlbStack.Outputs.LoadBalancerDnsName
+  PrimaryRdsEndpoint:
+    Description: Primary RDS endpoint.
+    Value: !GetAtt RdsStack.Outputs.DatabaseEndpoint
+  ApplicationUrl:
+    Description: Route 53 production application URL.
+    Value: !Sub '${HealthCheckProtocol}://${DomainName}'
+  DatabaseSecretArn:
+    Description: Primary DB secret ARN replicated to DR.
+    Value: !GetAtt RdsStack.Outputs.DatabaseSecretArn
+  PrimaryUnavailableAlarmName:
+    Description: CloudWatch alarm used to trigger DR confirmation.
+    Value: !GetAtt MonitoringStack.Outputs.PrimaryUnavailableAlarmName
+  BackupPlanId:
+    Description: AWS Backup plan ID.
+    Value: !GetAtt BackupStack.Outputs.BackupPlanId
+  Route53HealthCheckId:
+    Description: Primary endpoint Route 53 health check ID.
+    Value: !GetAtt Route53Stack.Outputs.Route53HealthCheckId

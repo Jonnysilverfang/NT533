@@ -1,0 +1,167 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  On-demand DR runtime root. This stack is created only after confirmed primary
+  failure; RDS is intentionally restored separately by AWS Backup.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: prod-dr
+  VpcCidr:
+    Type: String
+    Default: 10.20.0.0/16
+  PublicSubnet1Cidr:
+    Type: String
+    Default: 10.20.0.0/24
+  PublicSubnet2Cidr:
+    Type: String
+    Default: 10.20.1.0/24
+  PrivateAppSubnet1Cidr:
+    Type: String
+    Default: 10.20.10.0/24
+  PrivateAppSubnet2Cidr:
+    Type: String
+    Default: 10.20.11.0/24
+  PrivateDbSubnet1Cidr:
+    Type: String
+    Default: 10.20.20.0/24
+  PrivateDbSubnet2Cidr:
+    Type: String
+    Default: 10.20.21.0/24
+  CertificateArn:
+    Type: String
+    Default: ''
+  RepositoryPrefix:
+    Type: String
+    Default: prod
+  ImageTag:
+    Type: String
+    Default: v1
+  EcsCpu:
+    Type: String
+    Default: '256'
+  EcsMemory:
+    Type: String
+    Default: '512'
+  ProductionDesiredCount:
+    Type: Number
+    Default: 1
+    MinValue: 1
+
+Resources:
+  NetworkStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./network.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        VpcCidr: !Ref VpcCidr
+        PublicSubnet1Cidr: !Ref PublicSubnet1Cidr
+        PublicSubnet2Cidr: !Ref PublicSubnet2Cidr
+        PrivateAppSubnet1Cidr: !Ref PrivateAppSubnet1Cidr
+        PrivateAppSubnet2Cidr: !Ref PrivateAppSubnet2Cidr
+        PrivateDbSubnet1Cidr: !Ref PrivateDbSubnet1Cidr
+        PrivateDbSubnet2Cidr: !Ref PrivateDbSubnet2Cidr
+
+  SecurityStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./security.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        VpcId: !GetAtt NetworkStack.Outputs.VpcId
+
+  AlbStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./alb.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        VpcId: !GetAtt NetworkStack.Outputs.VpcId
+        PublicSubnetIds: !GetAtt NetworkStack.Outputs.PublicSubnetIds
+        AlbSecurityGroupId: !GetAtt SecurityStack.Outputs.AlbSecurityGroupId
+        CertificateArn: !Ref CertificateArn
+
+  IamStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./iam.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+
+  EcsStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./ecs.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        RepositoryPrefix: !Ref RepositoryPrefix
+        ImageTag: !Ref ImageTag
+        AppSubnetIds: !GetAtt NetworkStack.Outputs.AppSubnetIds
+        EcsSecurityGroupId: !GetAtt SecurityStack.Outputs.EcsSecurityGroupId
+        TaskExecutionRoleArn: !GetAtt IamStack.Outputs.TaskExecutionRoleArn
+        TaskRoleArn: !GetAtt IamStack.Outputs.TaskRoleArn
+        AuthTargetGroupArn: !GetAtt AlbStack.Outputs.AuthTargetGroupArn
+        ProductTargetGroupArn: !GetAtt AlbStack.Outputs.ProductTargetGroupArn
+        OrderTargetGroupArn: !GetAtt AlbStack.Outputs.OrderTargetGroupArn
+        EcsCpu: !Ref EcsCpu
+        EcsMemory: !Ref EcsMemory
+        ProductionDesiredCount: !Ref ProductionDesiredCount
+
+  MonitoringStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./monitoring.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        ClusterName: !GetAtt EcsStack.Outputs.ClusterName
+
+Outputs:
+  DrStackName:
+    Description: Runtime DR root stack name.
+    Value: !Ref AWS::StackName
+  VpcId:
+    Description: DR VPC ID.
+    Value: !GetAtt NetworkStack.Outputs.VpcId
+  DbSubnetGroupName:
+    Description: DB subnet group used by AWS Backup restore.
+    Value: !GetAtt NetworkStack.Outputs.DbSubnetGroupName
+  DbSecurityGroupId:
+    Description: Security group attached to restored RDS.
+    Value: !GetAtt SecurityStack.Outputs.DbSecurityGroupId
+  LoadBalancerArn:
+    Description: DR ALB ARN.
+    Value: !GetAtt AlbStack.Outputs.LoadBalancerArn
+  LoadBalancerDnsName:
+    Description: DR ALB DNS name.
+    Value: !GetAtt AlbStack.Outputs.LoadBalancerDnsName
+  LoadBalancerCanonicalHostedZoneId:
+    Description: DR ALB canonical hosted zone ID.
+    Value: !GetAtt AlbStack.Outputs.LoadBalancerCanonicalHostedZoneId
+  AuthTargetGroupArn:
+    Description: Auth target group ARN.
+    Value: !GetAtt AlbStack.Outputs.AuthTargetGroupArn
+  ProductTargetGroupArn:
+    Description: Product target group ARN.
+    Value: !GetAtt AlbStack.Outputs.ProductTargetGroupArn
+  OrderTargetGroupArn:
+    Description: Order target group ARN.
+    Value: !GetAtt AlbStack.Outputs.OrderTargetGroupArn
+  EcsClusterName:
+    Description: DR ECS cluster name.
+    Value: !GetAtt EcsStack.Outputs.ClusterName
+  AuthServiceName:
+    Description: DR auth service name.
+    Value: !GetAtt EcsStack.Outputs.AuthServiceName
+  ProductServiceName:
+    Description: DR product service name.
+    Value: !GetAtt EcsStack.Outputs.ProductServiceName
+  OrderServiceName:
+    Description: DR order service name.
+    Value: !GetAtt EcsStack.Outputs.OrderServiceName
+  RuntimeSecretArn:
+    Description: Secret populated with restored endpoint and copied credentials.
+    Value: !GetAtt EcsStack.Outputs.RuntimeSecretArn
+  ProductionDesiredCount:
+    Description: Task count used by DR orchestration.
+    Value: !GetAtt EcsStack.Outputs.ProductionDesiredCount

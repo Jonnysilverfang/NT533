@@ -1,0 +1,167 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: On-demand DR ECS cluster; services start at zero until database restore succeeds.
+
+Parameters:
+  ProjectName: {Type: String}
+  RepositoryPrefix: {Type: String, Default: prod}
+  ImageTag: {Type: String, Default: v1}
+  AppSubnetIds: {Type: 'List<AWS::EC2::Subnet::Id>'}
+  EcsSecurityGroupId: {Type: AWS::EC2::SecurityGroup::Id}
+  TaskExecutionRoleArn: {Type: String}
+  TaskRoleArn: {Type: String}
+  AuthTargetGroupArn: {Type: String}
+  ProductTargetGroupArn: {Type: String}
+  OrderTargetGroupArn: {Type: String}
+  EcsCpu: {Type: String, Default: '256', AllowedValues: ['256', '512', '1024']}
+  EcsMemory: {Type: String, Default: '512', AllowedValues: ['512', '1024', '2048']}
+  ProductionDesiredCount: {Type: Number, Default: 1, MinValue: 1}
+
+Resources:
+  RuntimeSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${ProjectName}-production-dr-runtime'
+      Description: Populated by DR workflow after RDS restore; never contains template credentials.
+      SecretString: '{"status":"pending-restore"}'
+      Tags:
+        - {Key: Environment, Value: production}
+        - {Key: Project, Value: multi-region-dr}
+        - {Key: RegionRole, Value: disaster-recovery}
+
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub '${ProjectName}-dr-ecs'
+      ClusterSettings: [{Name: containerInsights, Value: enabled}]
+
+  AuthLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: {LogGroupName: !Sub '/ecs/${ProjectName}-dr-auth', RetentionInDays: 30}
+  ProductLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: {LogGroupName: !Sub '/ecs/${ProjectName}-dr-product', RetentionInDays: 30}
+  OrderLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: {LogGroupName: !Sub '/ecs/${ProjectName}-dr-order', RetentionInDays: 30}
+
+  AuthTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${ProjectName}-dr-auth'
+      Cpu: !Ref EcsCpu
+      Memory: !Ref EcsMemory
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      ExecutionRoleArn: !Ref TaskExecutionRoleArn
+      TaskRoleArn: !Ref TaskRoleArn
+      ContainerDefinitions:
+        - Name: auth
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.${AWS::URLSuffix}/${RepositoryPrefix}-auth:${ImageTag}'
+          Essential: true
+          ReadonlyRootFilesystem: true
+          PortMappings: [{ContainerPort: 8080, Protocol: tcp}]
+          Environment: [{Name: SERVICE_NAME, Value: auth}, {Name: DB_NAME, Value: appdb}]
+          Secrets:
+            - {Name: DB_HOST, ValueFrom: !Sub '${RuntimeSecret}:host::'}
+            - {Name: DB_USERNAME, ValueFrom: !Sub '${RuntimeSecret}:username::'}
+            - {Name: DB_PASSWORD, ValueFrom: !Sub '${RuntimeSecret}:password::'}
+          LogConfiguration:
+            LogDriver: awslogs
+            Options: {awslogs-group: !Ref AuthLogGroup, awslogs-region: !Ref AWS::Region, awslogs-stream-prefix: auth, mode: blocking}
+  ProductTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${ProjectName}-dr-product'
+      Cpu: !Ref EcsCpu
+      Memory: !Ref EcsMemory
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      ExecutionRoleArn: !Ref TaskExecutionRoleArn
+      TaskRoleArn: !Ref TaskRoleArn
+      ContainerDefinitions:
+        - Name: product
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.${AWS::URLSuffix}/${RepositoryPrefix}-product:${ImageTag}'
+          Essential: true
+          ReadonlyRootFilesystem: true
+          PortMappings: [{ContainerPort: 8080, Protocol: tcp}]
+          Environment: [{Name: SERVICE_NAME, Value: product}, {Name: DB_NAME, Value: appdb}]
+          Secrets:
+            - {Name: DB_HOST, ValueFrom: !Sub '${RuntimeSecret}:host::'}
+            - {Name: DB_USERNAME, ValueFrom: !Sub '${RuntimeSecret}:username::'}
+            - {Name: DB_PASSWORD, ValueFrom: !Sub '${RuntimeSecret}:password::'}
+          LogConfiguration:
+            LogDriver: awslogs
+            Options: {awslogs-group: !Ref ProductLogGroup, awslogs-region: !Ref AWS::Region, awslogs-stream-prefix: product, mode: blocking}
+  OrderTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${ProjectName}-dr-order'
+      Cpu: !Ref EcsCpu
+      Memory: !Ref EcsMemory
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      ExecutionRoleArn: !Ref TaskExecutionRoleArn
+      TaskRoleArn: !Ref TaskRoleArn
+      ContainerDefinitions:
+        - Name: order
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.${AWS::URLSuffix}/${RepositoryPrefix}-order:${ImageTag}'
+          Essential: true
+          ReadonlyRootFilesystem: true
+          PortMappings: [{ContainerPort: 8080, Protocol: tcp}]
+          Environment: [{Name: SERVICE_NAME, Value: order}, {Name: DB_NAME, Value: appdb}]
+          Secrets:
+            - {Name: DB_HOST, ValueFrom: !Sub '${RuntimeSecret}:host::'}
+            - {Name: DB_USERNAME, ValueFrom: !Sub '${RuntimeSecret}:username::'}
+            - {Name: DB_PASSWORD, ValueFrom: !Sub '${RuntimeSecret}:password::'}
+          LogConfiguration:
+            LogDriver: awslogs
+            Options: {awslogs-group: !Ref OrderLogGroup, awslogs-region: !Ref AWS::Region, awslogs-stream-prefix: order, mode: blocking}
+
+  AuthService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub '${ProjectName}-dr-auth'
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref AuthTaskDefinition
+      DesiredCount: 0
+      LaunchType: FARGATE
+      PlatformVersion: LATEST
+      HealthCheckGracePeriodSeconds: 60
+      DeploymentConfiguration: {MinimumHealthyPercent: 100, MaximumPercent: 200, DeploymentCircuitBreaker: {Enable: true, Rollback: true}}
+      NetworkConfiguration: {AwsvpcConfiguration: {AssignPublicIp: DISABLED, SecurityGroups: [!Ref EcsSecurityGroupId], Subnets: !Ref AppSubnetIds}}
+      LoadBalancers: [{ContainerName: auth, ContainerPort: 8080, TargetGroupArn: !Ref AuthTargetGroupArn}]
+  ProductService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub '${ProjectName}-dr-product'
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref ProductTaskDefinition
+      DesiredCount: 0
+      LaunchType: FARGATE
+      PlatformVersion: LATEST
+      HealthCheckGracePeriodSeconds: 60
+      DeploymentConfiguration: {DeploymentCircuitBreaker: {Enable: true, Rollback: true}}
+      NetworkConfiguration: {AwsvpcConfiguration: {AssignPublicIp: DISABLED, SecurityGroups: [!Ref EcsSecurityGroupId], Subnets: !Ref AppSubnetIds}}
+      LoadBalancers: [{ContainerName: product, ContainerPort: 8080, TargetGroupArn: !Ref ProductTargetGroupArn}]
+  OrderService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub '${ProjectName}-dr-order'
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref OrderTaskDefinition
+      DesiredCount: 0
+      LaunchType: FARGATE
+      PlatformVersion: LATEST
+      HealthCheckGracePeriodSeconds: 60
+      DeploymentConfiguration: {DeploymentCircuitBreaker: {Enable: true, Rollback: true}}
+      NetworkConfiguration: {AwsvpcConfiguration: {AssignPublicIp: DISABLED, SecurityGroups: [!Ref EcsSecurityGroupId], Subnets: !Ref AppSubnetIds}}
+      LoadBalancers: [{ContainerName: order, ContainerPort: 8080, TargetGroupArn: !Ref OrderTargetGroupArn}]
+
+Outputs:
+  ClusterName: {Description: DR ECS cluster name., Value: !Ref Cluster}
+  ClusterArn: {Description: DR ECS cluster ARN., Value: !GetAtt Cluster.Arn}
+  AuthServiceName: {Description: DR auth service name., Value: !GetAtt AuthService.Name}
+  ProductServiceName: {Description: DR product service name., Value: !GetAtt ProductService.Name}
+  OrderServiceName: {Description: DR order service name., Value: !GetAtt OrderService.Name}
+  RuntimeSecretArn: {Description: Secret populated after restore., Value: !Ref RuntimeSecret}
+  ProductionDesiredCount: {Description: Desired task count used by orchestration., Value: !Ref ProductionDesiredCount}

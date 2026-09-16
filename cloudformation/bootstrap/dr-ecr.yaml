@@ -1,0 +1,77 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Low-cost Singapore DR ECR repositories. These repositories exist before
+  cross-Region replication so destination-side security settings are explicit.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: production
+    AllowedValues: [production]
+  RepositoryPrefix:
+    Type: String
+    Default: prod
+    AllowedPattern: '^[a-z0-9]+(?:[._/-][a-z0-9]+)*$'
+
+Resources:
+  AuthRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Sub '${RepositoryPrefix}-auth'
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      LifecyclePolicy:
+        LifecyclePolicyText: >-
+          {"rules":[{"rulePriority":1,"description":"Keep 20 release images","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":20},"action":{"type":"expire"}}]}
+      Tags:
+        - {Key: Environment, Value: !Ref Environment}
+        - {Key: ManagedBy, Value: cloudformation}
+
+  ProductRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Sub '${RepositoryPrefix}-product'
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      LifecyclePolicy:
+        LifecyclePolicyText: >-
+          {"rules":[{"rulePriority":1,"description":"Keep 20 release images","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":20},"action":{"type":"expire"}}]}
+      Tags:
+        - {Key: Environment, Value: !Ref Environment}
+        - {Key: ManagedBy, Value: cloudformation}
+
+  OrderRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Sub '${RepositoryPrefix}-order'
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      LifecyclePolicy:
+        LifecyclePolicyText: >-
+          {"rules":[{"rulePriority":1,"description":"Keep 20 release images","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":20},"action":{"type":"expire"}}]}
+      Tags:
+        - {Key: Environment, Value: !Ref Environment}
+        - {Key: ManagedBy, Value: cloudformation}
+
+Outputs:
+  AuthRepositoryUri:
+    Value: !GetAtt AuthRepository.RepositoryUri
+  ProductRepositoryUri:
+    Value: !GetAtt ProductRepository.RepositoryUri
+  OrderRepositoryUri:
+    Value: !GetAtt OrderRepository.RepositoryUri

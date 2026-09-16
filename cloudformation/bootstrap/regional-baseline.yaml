@@ -1,0 +1,127 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Production DR regional baseline: private CloudFormation artifact bucket and
+  encrypted AWS Backup vault. Deploy once in Sydney and once in Singapore.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: prod-dr
+    AllowedPattern: '^[a-z][a-z0-9-]{2,20}$'
+  Environment:
+    Type: String
+    Default: production
+    AllowedValues: [production]
+  ArtifactBucketName:
+    Type: String
+    AllowedPattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+  BackupVaultName:
+    Type: String
+    AllowedPattern: '^[a-zA-Z0-9-_]{2,50}$'
+
+Resources:
+  BackupKey:
+    Type: AWS::KMS::Key
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: !Sub '${ProjectName} ${AWS::Region} backup vault key'
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowAccountAdministration
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: multi-region-dr
+        - Key: ManagedBy
+          Value: cloudformation
+
+  BackupKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub 'alias/${ProjectName}-${AWS::Region}-backup'
+      TargetKeyId: !Ref BackupKey
+
+  BackupVault:
+    Type: AWS::Backup::BackupVault
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BackupVaultName: !Ref BackupVaultName
+      EncryptionKeyArn: !GetAtt BackupKey.Arn
+      BackupVaultTags:
+        Environment: !Ref Environment
+        Project: multi-region-dr
+        ManagedBy: cloudformation
+
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Ref ArtifactBucketName
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+            BucketKeyEnabled: true
+      VersioningConfiguration:
+        Status: Enabled
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: multi-region-dr
+        - Key: ManagedBy
+          Value: cloudformation
+
+  ArtifactBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ArtifactBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt ArtifactBucket.Arn
+              - !Sub '${ArtifactBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+
+Outputs:
+  ArtifactBucketName:
+    Description: Private bucket used by aws cloudformation package.
+    Value: !Ref ArtifactBucket
+  ArtifactBucketArn:
+    Description: Artifact bucket ARN.
+    Value: !GetAtt ArtifactBucket.Arn
+  BackupVaultName:
+    Description: Regional AWS Backup vault name.
+    Value: !Ref BackupVault
+  BackupVaultArn:
+    Description: Regional AWS Backup vault ARN.
+    Value: !GetAtt BackupVault.BackupVaultArn
+  BackupKmsKeyArn:
+    Description: KMS key used by the backup vault.
+    Value: !GetAtt BackupKey.Arn

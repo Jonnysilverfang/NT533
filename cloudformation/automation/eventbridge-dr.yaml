@@ -1,0 +1,67 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: DR custom event bus and rule that starts only the Step Functions orchestrator.
+
+Parameters:
+  ProjectName: {Type: String}
+  PrimaryRegion: {Type: String, Default: ap-southeast-2}
+  PrimaryAlarmName: {Type: String}
+  StateMachineArn: {Type: String}
+  NotificationTopicArn: {Type: String}
+
+Resources:
+  DrEventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: !Sub '${ProjectName}-dr-events'
+
+  StartExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement: [{Effect: Allow, Principal: {Service: events.amazonaws.com}, Action: sts:AssumeRole}]
+      Policies:
+        - PolicyName: StartDrWorkflow
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement: [{Effect: Allow, Action: states:StartExecution, Resource: !Ref StateMachineArn}]
+
+  AlarmRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${ProjectName}-confirmed-alarm-trigger'
+      EventBusName: !Ref DrEventBus
+      State: ENABLED
+      EventPattern:
+        source: [aws.cloudwatch]
+        detail-type: [CloudWatch Alarm State Change]
+        region: [!Ref PrimaryRegion]
+        detail:
+          alarmName: [!Ref PrimaryAlarmName]
+          state:
+            value: [ALARM]
+      Targets:
+        - Id: DrOrchestrator
+          Arn: !Ref StateMachineArn
+          RoleArn: !GetAtt StartExecutionRole.Arn
+          Input: '{"trigger":"alarm","simulate_failure":false,"skip_route53_switch":false}'
+
+  WorkflowFailureRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${ProjectName}-dr-workflow-failures'
+      EventBusName: default
+      State: ENABLED
+      EventPattern:
+        source: [aws.states]
+        detail-type: [Step Functions Execution Status Change]
+        detail:
+          stateMachineArn: [!Ref StateMachineArn]
+          status: [FAILED, TIMED_OUT, ABORTED]
+      Targets:
+        - Id: NotifyWorkflowFailure
+          Arn: !Ref NotificationTopicArn
+
+Outputs:
+  DrEventBusArn: {Description: Cross-Region target event bus ARN., Value: !GetAtt DrEventBus.Arn}
+  DrEventBusName: {Description: DR event bus name., Value: !Ref DrEventBus}
