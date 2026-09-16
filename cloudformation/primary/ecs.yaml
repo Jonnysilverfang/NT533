@@ -134,6 +134,8 @@ Resources:
               Value: !Ref DatabaseEndpoint
             - Name: DB_NAME
               Value: !Ref DatabaseName
+            - Name: PORT
+              Value: !Sub '${ContainerPort}'
           Secrets:
             - Name: DB_USERNAME
               ValueFrom: !Sub '${DatabaseSecretArn}:username::'
@@ -142,9 +144,9 @@ Resources:
           HealthCheck:
             Command:
               - CMD-SHELL
-              - >-
+              - !Sub >-
                 python -c "import urllib.request;
-                urllib.request.urlopen('http://127.0.0.1:8080/health')" || exit 1
+                urllib.request.urlopen('http://127.0.0.1:${ContainerPort}/health')" || exit 1
             Interval: 30
             Timeout: 5
             Retries: 3
@@ -172,14 +174,25 @@ Resources:
           Image: !Sub '${ProductRepositoryUri}:${ImageTag}'
           Essential: true
           ReadonlyRootFilesystem: true
-          PortMappings: [{ContainerPort: 8080, Protocol: tcp}]
+          PortMappings: [{ContainerPort: !Ref ContainerPort, Protocol: tcp}]
           Environment:
             - {Name: SERVICE_NAME, Value: product}
             - {Name: DB_HOST, Value: !Ref DatabaseEndpoint}
             - {Name: DB_NAME, Value: !Ref DatabaseName}
+            - {Name: PORT, Value: !Sub '${ContainerPort}'}
           Secrets:
             - {Name: DB_USERNAME, ValueFrom: !Sub '${DatabaseSecretArn}:username::'}
             - {Name: DB_PASSWORD, ValueFrom: !Sub '${DatabaseSecretArn}:password::'}
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - !Sub >-
+                python -c "import urllib.request;
+                urllib.request.urlopen('http://127.0.0.1:${ContainerPort}/health')" || exit 1
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 20
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -203,14 +216,25 @@ Resources:
           Image: !Sub '${OrderRepositoryUri}:${ImageTag}'
           Essential: true
           ReadonlyRootFilesystem: true
-          PortMappings: [{ContainerPort: 8080, Protocol: tcp}]
+          PortMappings: [{ContainerPort: !Ref ContainerPort, Protocol: tcp}]
           Environment:
             - {Name: SERVICE_NAME, Value: order}
             - {Name: DB_HOST, Value: !Ref DatabaseEndpoint}
             - {Name: DB_NAME, Value: !Ref DatabaseName}
+            - {Name: PORT, Value: !Sub '${ContainerPort}'}
           Secrets:
             - {Name: DB_USERNAME, ValueFrom: !Sub '${DatabaseSecretArn}:username::'}
             - {Name: DB_PASSWORD, ValueFrom: !Sub '${DatabaseSecretArn}:password::'}
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - !Sub >-
+                python -c "import urllib.request;
+                urllib.request.urlopen('http://127.0.0.1:${ContainerPort}/health')" || exit 1
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 20
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -261,7 +285,7 @@ Resources:
           SecurityGroups: [!Ref EcsSecurityGroupId]
           Subnets: !Ref AppSubnetIds
       LoadBalancers:
-        - {ContainerName: product, ContainerPort: 8080, TargetGroupArn: !Ref ProductTargetGroupArn}
+        - {ContainerName: product, ContainerPort: !Ref ContainerPort, TargetGroupArn: !Ref ProductTargetGroupArn}
 
   OrderService:
     Type: AWS::ECS::Service
@@ -281,7 +305,7 @@ Resources:
           SecurityGroups: [!Ref EcsSecurityGroupId]
           Subnets: !Ref AppSubnetIds
       LoadBalancers:
-        - {ContainerName: order, ContainerPort: 8080, TargetGroupArn: !Ref OrderTargetGroupArn}
+        - {ContainerName: order, ContainerPort: !Ref ContainerPort, TargetGroupArn: !Ref OrderTargetGroupArn}
 
 Outputs:
   ClusterArn:

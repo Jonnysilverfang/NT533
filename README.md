@@ -68,11 +68,12 @@ cloudformation/
 │   ├── root-automation.yaml
 │   ├── iam.yaml
 │   ├── sns.yaml
+│   ├── lock.yaml                      # DynamoDB singleton lock with TTL
 │   ├── lambda.yaml
 │   ├── stepfunctions.yaml
 │   ├── eventbridge-dr.yaml
 │   ├── eventbridge-primary.yaml
-│   └── lambda/<single-purpose>/index.py
+│   └── lambda/<single-purpose>/index.py # 7 small Lambdas
 ├── parameters/
 │   ├── prod-primary.json
 │   ├── prod-dr.json
@@ -81,7 +82,8 @@ cloudformation/
     ├── validate.ps1
     ├── package.ps1
     ├── publish-images.ps1
-    └── invoke-dr-test.ps1
+    ├── invoke-dr-test.ps1
+    └── cleanup-dr-test.ps1            # destructive; explicit guard required
 ```
 
 ## 3. Current-service checks
@@ -101,12 +103,14 @@ Nguồn chính: [Step Functions endpoints](https://docs.aws.amazon.com/general/l
 - ECS chỉ nhận port 8080 từ ALB SG; RDS chỉ nhận port 5432 từ ECS SG.
 - Credential được Secrets Manager sinh, không nằm trong template/Git. Secret primary được replicate sang Singapore. Khi restore, Lambda chỉ đọc replica và tạo runtime secret riêng chứa endpoint DR.
 - Artifact buckets block toàn bộ public access, bật versioning/encryption và deny non-TLS.
-- SNS được encrypt; CloudWatch/Step Functions logs có retention.
+- SNS dùng customer-managed KMS key có rotation; key policy cho phép SNS/EventBridge/Step Functions dùng key trong đúng account và encryption context của topic. CloudWatch/Step Functions logs có retention.
+- EventBridge targets có retry 24 giờ và encrypted SQS DLQ giữ event lỗi 14 ngày.
+- DynamoDB conditional write tạo singleton lock: chỉ một DR execution được phép dựng stack/restore/cutover; TTL giải phóng lock bị orphan sau timeout.
 - Không role nào dùng `AdministratorAccess`. Một số create/list/describe API bắt buộc `Resource: '*'` vì resource chưa tồn tại hoặc API không hỗ trợ resource-level permission; các action vẫn được liệt kê cụ thể. Step Functions chỉ `PassRole` CloudFormation execution role cho `cloudformation.amazonaws.com`; role đó chỉ `PassRole` các runtime task roles có prefix của DR stack cho `ecs-tasks.amazonaws.com`.
 
 Demo `/health` dùng TCP probe có timeout tới RDS để ALB không đánh dấu target healthy khi database endpoint chưa reachable. Đây là infrastructure readiness gate, không thay thế transaction/canary kiểm tra tính đúng dữ liệu; workload production phải bổ sung query/read-write canary phù hợp schema.
 
-Trong production thật nên thêm permission boundary/SCP, CloudTrail organization trail, AWS Config, WAF trên ALB, ALB access logs và customer-managed KMS key cho SNS/logs nếu policy tổ chức yêu cầu.
+Trong production thật nên thêm permission boundary/SCP, CloudTrail organization trail, AWS Config, WAF trên ALB, ALB access logs và customer-managed KMS key cho log groups nếu policy tổ chức yêu cầu.
 
 ## 5. Prerequisites
 
@@ -125,7 +129,7 @@ Thay toàn bộ `REPLACE_WITH_*` trong `cloudformation/parameters/*.json`. Giữ
 pwsh -File .\cloudformation\scripts\validate.ps1
 ```
 
-Project bắt buộc đi qua `aws cloudformation package`: local nested `TemplateURL` và Lambda `Code` không phải template deploy trực tiếp. Warning `W3002` vì lý do này là expected. Trong phiên xây dựng, `cfn-lint 1.56.3` đã chạy cho cả `ap-southeast-2` và `ap-southeast-1` và không còn schema error; ASL JSON parse thành công với 49 states. Chưa chạy `validate-state-machine-definition` vì AWS CLI chưa có credentials.
+Project bắt buộc đi qua `aws cloudformation package`: local nested `TemplateURL` và Lambda `Code` không phải template deploy trực tiếp. Warning `W3002` vì lý do này là expected. Trong phiên xây dựng, `cfn-lint 1.56.3` đã chạy cho cả `ap-southeast-2` và `ap-southeast-1` và không còn schema error; ASL JSON parse thành công với 57 states. Chưa chạy `cfn-guard` vì máy chưa có binary/ruleset, và chưa chạy `validate-state-machine-definition` vì AWS CLI chưa có credentials.
 
 ## 7. Deployment order
 
@@ -164,7 +168,8 @@ Review bằng `aws cloudformation describe-change-set`, rồi mới `execute-cha
 ```powershell
 .\cloudformation\scripts\package.ps1 `
   -PrimaryArtifactBucket "prod-dr-cfn-artifacts-$accountId-ap-southeast-2" `
-  -DrArtifactBucket "prod-dr-cfn-artifacts-$accountId-ap-southeast-1"
+  -DrArtifactBucket "prod-dr-cfn-artifacts-$accountId-ap-southeast-1" `
+  -ReleaseVersion "release-2026-09-16.1"
 
 aws cloudformation create-change-set `
   --stack-name prod-dr-primary `
@@ -176,14 +181,14 @@ aws cloudformation create-change-set `
   --region ap-southeast-2
 ```
 
-`prod-primary.json` để `EcsDesiredCount=0`, nên stack có thể tạo task definition/service trước khi image tồn tại mà không pull image.
+`ReleaseVersion` trở thành immutable S3 key `releases/<version>/dr-root.yaml`; script từ chối overwrite để disaster không vô tình dùng template mới hơn bản đã test. `prod-primary.json` để `EcsDesiredCount=0`, nên stack có thể tạo task definition/service trước khi image tồn tại mà không pull image.
 
 ### Phase 2 — ECR replication và image
 
 Các repository Singapore được tạo trước để ép `IMMUTABLE`, scan-on-push và lifecycle policy; ECR replication không sao chép các thiết lập repository này. Sau khi primary stack tạo ECR replication configuration:
 
 ```powershell
-.\cloudformation\scripts\publish-images.ps1 -AccountId $accountId -ImageTag v1
+.\cloudformation\scripts\publish-images.ps1 -AccountId $accountId -RepositoryPrefix prod -ImageTag v1
 
 aws ecr describe-images --repository-name prod-auth --image-ids imageTag=v1 --region ap-southeast-1
 aws ecr describe-images --repository-name prod-product --image-ids imageTag=v1 --region ap-southeast-1
@@ -209,7 +214,7 @@ Console: **AWS Backup → Backup vaults → prod-dr-backup-vault → Recovery po
 
 ### Phase 5–6 — DR template và automation
 
-`package.ps1` upload packaged DR root vào bucket Singapore. Gán URL in ra màn hình vào `DrRuntimeTemplateUrl` trong `prod-automation.json`, rồi tạo/review change set automation ở Singapore.
+`package.ps1` upload packaged DR root vào immutable release key tại Singapore. Gán URL in ra màn hình vào `DrRuntimeTemplateUrl`; điền thêm `SourceDatabaseArn` từ output primary stack và KMS key ARN từ hai baseline stack trong các parameter files, rồi tạo/review change set automation ở Singapore.
 
 Sau khi automation stack hoàn tất, lấy output `DrEventBusArn` và deploy forwarder tại Sydney:
 
@@ -238,14 +243,16 @@ Console paths: **CloudFormation → Stacks**, **ECS → Clusters**, **EC2 → Lo
 
 ## 9. DR workflow và false-positive controls
 
-Alarm LAB dùng `HealthyHostCount < 1`, 3 datapoints trong 5 phút, `TreatMissingData=breaching`. Một datapoint fail không dựng DR. Workflow sau đó:
+Mỗi service có alarm `HealthyHostCount < 1`, 3 datapoints trong 5 phút, `TreatMissingData=breaching`; composite alarm chính chuyển `ALARM` nếu Auth, Product hoặc Order unavailable. Một datapoint fail không dựng DR. Workflow sau đó:
 
 1. Chờ thêm 90 giây.
 2. Lambda đọc lại đúng alarm tại Sydney.
 3. Nếu alarm không còn `ALARM`, kết thúc mà không tạo DR.
 4. Sau khi DR healthy, đọc alarm thêm lần nữa ngay trước DNS cutover.
 
-Trong production nên dùng composite signal/Synthetics: external HTTP availability + ALB healthy hosts + error rate, và có manual approval/SSM Incident Manager cho cutover có blast radius cao. `HealthyHostCount` đơn lẻ phù hợp LAB vì dễ mô phỏng nhưng không bao phủ DNS/TLS/application correctness hoàn chỉnh.
+State machine timeout được parameter hóa bằng `WorkflowTimeoutSeconds`, mặc định 43.200 giây (12 giờ, tối đa 24 giờ). Lock TTL dùng cùng giới hạn; execution bị stop/timeout không thể chạy release state nhưng execution mới có thể chiếm lock sau khi TTL hết hạn.
+
+Composite target-health hiện bao phủ cả ba service nhưng vẫn chưa bao phủ DNS/TLS hoặc transaction correctness. Production nên bổ sung Synthetics external HTTP, error rate và manual approval/SSM Incident Manager cho cutover có blast radius cao.
 
 ## 10. Safe DR test
 
@@ -265,6 +272,8 @@ T0 Start -> confirm -> CFN runtime ready (T1)
 ```
 
 Chỉ dùng `-AllowRoute53Switch` trong maintenance window đã được phê duyệt. Khi đó Step Functions tạo SECONDARY alias sau health gate; Route 53 native failover vẫn ưu tiên PRIMARY khi Sydney healthy.
+
+Manual simulation truyền `test_mode` cho restore nên RDS test không bật deletion protection. Alarm production vẫn restore với deletion protection. Workflow dùng lock singleton; execution thứ hai được suppress và thông báo thay vì tạo restore song song. Nếu primary hồi phục sau khi DR đã dựng nhưng trước cutover, tài nguyên được giữ để điều tra và phải cleanup có kiểm soát—không tự động xóa database phục hồi.
 
 ## 11. RTO/RPO measurement
 
@@ -328,9 +337,20 @@ Thứ tự an toàn cho một DR test:
 
 1. Xóa SECONDARY Route 53 record nếu test đã cutover; xác minh PRIMARY đang healthy.
 2. Scale DR ECS về 0.
-3. Tạo final snapshot nếu cần. RDS restored bật deletion protection; chỉ sau approval cleanup mới vô hiệu hóa protection và xóa DB **trước** DR stack, nếu không DB ENI/SG sẽ chặn stack deletion.
+3. Tạo final snapshot nếu cần. Disaster restore bật deletion protection còn manual test không bật; chỉ sau approval cleanup mới vô hiệu hóa protection khi cần và xóa DB **trước** DR stack, nếu không DB ENI/SG sẽ chặn stack deletion.
 4. Delete `prod-dr-runtime-production` và chờ `DELETE_COMPLETE`.
 5. Chỉ khi ngừng toàn bộ LAB: delete primary EventBridge forwarder, automation stack, rồi baseline artifact objects/buckets.
 6. Recovery points/vault, primary RDS và primary stack được giữ mặc định. Chỉ xóa bằng một change được phê duyệt; KMS keys, buckets, vaults và RDS có retention/deletion protection chủ ý.
 
 Không dùng `--force`, không xóa recovery point production mù quáng, và không vô hiệu hóa deletion protection chỉ để làm cho lệnh destroy “chạy được”.
+
+Script cleanup có guard thực hiện đúng thứ tự DNS gate → ECS về 0 → final snapshot/RDS delete → runtime stack delete:
+
+```powershell
+.\cloudformation\scripts\cleanup-dr-test.ps1 `
+  -ConfirmCleanup `
+  -HostedZoneId REPLACE_WITH_HOSTED_ZONE_ID `
+  -DomainName app.example.com
+```
+
+Script từ chối chạy nếu SECONDARY record còn tồn tại. Với disaster restore có deletion protection, phải thêm `-AllowDisableDeletionProtection` sau approval riêng. Mặc định script tạo final snapshot; `-SkipFinalSnapshot` là lựa chọn phá hủy dữ liệu và không nên dùng ngoài test disposable. `DeletionPolicy: Retain` cố ý giữ artifact buckets, backup vaults, KMS keys, ECR repositories và DynamoDB lock table sau khi xóa stack; các resource này cần inventory/approval riêng nếu muốn xóa vật lý.

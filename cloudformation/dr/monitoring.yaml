@@ -4,6 +4,10 @@ Description: On-demand DR dashboard created with the runtime stack.
 Parameters:
   ProjectName: {Type: String}
   ClusterName: {Type: String}
+  LoadBalancerFullName: {Type: String}
+  AuthTargetGroupFullName: {Type: String}
+  ProductTargetGroupFullName: {Type: String}
+  OrderTargetGroupFullName: {Type: String}
 
 Resources:
   Dashboard:
@@ -11,7 +15,7 @@ Resources:
     Properties:
       DashboardName: !Sub '${ProjectName}-dr-runtime'
       DashboardBody: !Sub |
-        {"start":"-PT8H","widgets":[{"type":"metric","width":12,"height":6,"properties":{"title":"DR ECS running tasks","region":"${AWS::Region}","metrics":[["ECS/ContainerInsights","RunningTaskCount","ClusterName","${ClusterName}"]],"period":60}},{"type":"metric","x":12,"width":12,"height":6,"properties":{"title":"DR ALB target response time","region":"${AWS::Region}","metrics":[["AWS/ApplicationELB","TargetResponseTime"]],"period":60,"stat":"p99"}}]}
+        {"start":"-PT8H","widgets":[{"type":"metric","width":12,"height":6,"properties":{"title":"DR ECS running tasks","region":"${AWS::Region}","metrics":[["ECS/ContainerInsights","RunningTaskCount","ClusterName","${ClusterName}"]],"period":60}},{"type":"metric","x":12,"width":12,"height":6,"properties":{"title":"DR ALB target response time","region":"${AWS::Region}","metrics":[["AWS/ApplicationELB","TargetResponseTime","LoadBalancer","${LoadBalancerFullName}","TargetGroup","${AuthTargetGroupFullName}"],[".",".",".",".",".","${ProductTargetGroupFullName}"],[".",".",".",".",".","${OrderTargetGroupFullName}"]],"period":60,"stat":"p99"}}]}
 
 Outputs:
   DashboardName: {Description: DR runtime dashboard name., Value: !Ref Dashboard}

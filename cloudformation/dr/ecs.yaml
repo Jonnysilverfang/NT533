@@ -5,6 +5,8 @@ Parameters:
   ProjectName: {Type: String}
   RepositoryPrefix: {Type: String, Default: prod}
   ImageTag: {Type: String, Default: v1}
+  DatabaseName: {Type: String, Default: appdb}
+  ContainerPort: {Type: Number, Default: 8080}
   AppSubnetIds: {Type: 'List<AWS::EC2::Subnet::Id>'}
   EcsSecurityGroupId: {Type: AWS::EC2::SecurityGroup::Id}
   TaskExecutionRoleArn: {Type: String}
@@ -59,12 +61,18 @@ Resources:
           Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.${AWS::URLSuffix}/${RepositoryPrefix}-auth:${ImageTag}'
           Essential: true
           ReadonlyRootFilesystem: true
-          PortMappings: [{ContainerPort: 8080, Protocol: tcp}]
-          Environment: [{Name: SERVICE_NAME, Value: auth}, {Name: DB_NAME, Value: appdb}]
+          PortMappings: [{ContainerPort: !Ref ContainerPort, Protocol: tcp}]
+          Environment: [{Name: SERVICE_NAME, Value: auth}, {Name: DB_NAME, Value: !Ref DatabaseName}, {Name: PORT, Value: !Sub '${ContainerPort}'}]
           Secrets:
             - {Name: DB_HOST, ValueFrom: !Sub '${RuntimeSecret}:host::'}
             - {Name: DB_USERNAME, ValueFrom: !Sub '${RuntimeSecret}:username::'}
             - {Name: DB_PASSWORD, ValueFrom: !Sub '${RuntimeSecret}:password::'}
+          HealthCheck:
+            Command: [CMD-SHELL, !Sub 'python -c "import urllib.request; urllib.request.urlopen(''http://127.0.0.1:${ContainerPort}/health'')" || exit 1']
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 20
           LogConfiguration:
             LogDriver: awslogs
             Options: {awslogs-group: !Ref AuthLogGroup, awslogs-region: !Ref AWS::Region, awslogs-stream-prefix: auth, mode: blocking}
@@ -83,12 +91,18 @@ Resources:
           Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.${AWS::URLSuffix}/${RepositoryPrefix}-product:${ImageTag}'
           Essential: true
           ReadonlyRootFilesystem: true
-          PortMappings: [{ContainerPort: 8080, Protocol: tcp}]
-          Environment: [{Name: SERVICE_NAME, Value: product}, {Name: DB_NAME, Value: appdb}]
+          PortMappings: [{ContainerPort: !Ref ContainerPort, Protocol: tcp}]
+          Environment: [{Name: SERVICE_NAME, Value: product}, {Name: DB_NAME, Value: !Ref DatabaseName}, {Name: PORT, Value: !Sub '${ContainerPort}'}]
           Secrets:
             - {Name: DB_HOST, ValueFrom: !Sub '${RuntimeSecret}:host::'}
             - {Name: DB_USERNAME, ValueFrom: !Sub '${RuntimeSecret}:username::'}
             - {Name: DB_PASSWORD, ValueFrom: !Sub '${RuntimeSecret}:password::'}
+          HealthCheck:
+            Command: [CMD-SHELL, !Sub 'python -c "import urllib.request; urllib.request.urlopen(''http://127.0.0.1:${ContainerPort}/health'')" || exit 1']
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 20
           LogConfiguration:
             LogDriver: awslogs
             Options: {awslogs-group: !Ref ProductLogGroup, awslogs-region: !Ref AWS::Region, awslogs-stream-prefix: product, mode: blocking}
@@ -107,12 +121,18 @@ Resources:
           Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.${AWS::URLSuffix}/${RepositoryPrefix}-order:${ImageTag}'
           Essential: true
           ReadonlyRootFilesystem: true
-          PortMappings: [{ContainerPort: 8080, Protocol: tcp}]
-          Environment: [{Name: SERVICE_NAME, Value: order}, {Name: DB_NAME, Value: appdb}]
+          PortMappings: [{ContainerPort: !Ref ContainerPort, Protocol: tcp}]
+          Environment: [{Name: SERVICE_NAME, Value: order}, {Name: DB_NAME, Value: !Ref DatabaseName}, {Name: PORT, Value: !Sub '${ContainerPort}'}]
           Secrets:
             - {Name: DB_HOST, ValueFrom: !Sub '${RuntimeSecret}:host::'}
             - {Name: DB_USERNAME, ValueFrom: !Sub '${RuntimeSecret}:username::'}
             - {Name: DB_PASSWORD, ValueFrom: !Sub '${RuntimeSecret}:password::'}
+          HealthCheck:
+            Command: [CMD-SHELL, !Sub 'python -c "import urllib.request; urllib.request.urlopen(''http://127.0.0.1:${ContainerPort}/health'')" || exit 1']
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 20
           LogConfiguration:
             LogDriver: awslogs
             Options: {awslogs-group: !Ref OrderLogGroup, awslogs-region: !Ref AWS::Region, awslogs-stream-prefix: order, mode: blocking}
@@ -129,7 +149,7 @@ Resources:
       HealthCheckGracePeriodSeconds: 60
       DeploymentConfiguration: {MinimumHealthyPercent: 100, MaximumPercent: 200, DeploymentCircuitBreaker: {Enable: true, Rollback: true}}
       NetworkConfiguration: {AwsvpcConfiguration: {AssignPublicIp: DISABLED, SecurityGroups: [!Ref EcsSecurityGroupId], Subnets: !Ref AppSubnetIds}}
-      LoadBalancers: [{ContainerName: auth, ContainerPort: 8080, TargetGroupArn: !Ref AuthTargetGroupArn}]
+      LoadBalancers: [{ContainerName: auth, ContainerPort: !Ref ContainerPort, TargetGroupArn: !Ref AuthTargetGroupArn}]
   ProductService:
     Type: AWS::ECS::Service
     Properties:
@@ -142,7 +162,7 @@ Resources:
       HealthCheckGracePeriodSeconds: 60
       DeploymentConfiguration: {DeploymentCircuitBreaker: {Enable: true, Rollback: true}}
       NetworkConfiguration: {AwsvpcConfiguration: {AssignPublicIp: DISABLED, SecurityGroups: [!Ref EcsSecurityGroupId], Subnets: !Ref AppSubnetIds}}
-      LoadBalancers: [{ContainerName: product, ContainerPort: 8080, TargetGroupArn: !Ref ProductTargetGroupArn}]
+      LoadBalancers: [{ContainerName: product, ContainerPort: !Ref ContainerPort, TargetGroupArn: !Ref ProductTargetGroupArn}]
   OrderService:
     Type: AWS::ECS::Service
     Properties:
@@ -155,7 +175,7 @@ Resources:
       HealthCheckGracePeriodSeconds: 60
       DeploymentConfiguration: {DeploymentCircuitBreaker: {Enable: true, Rollback: true}}
       NetworkConfiguration: {AwsvpcConfiguration: {AssignPublicIp: DISABLED, SecurityGroups: [!Ref EcsSecurityGroupId], Subnets: !Ref AppSubnetIds}}
-      LoadBalancers: [{ContainerName: order, ContainerPort: 8080, TargetGroupArn: !Ref OrderTargetGroupArn}]
+      LoadBalancers: [{ContainerName: order, ContainerPort: !Ref ContainerPort, TargetGroupArn: !Ref OrderTargetGroupArn}]
 
 Outputs:
   ClusterName: {Description: DR ECS cluster name., Value: !Ref Cluster}

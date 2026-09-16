@@ -7,6 +7,14 @@ Parameters:
   DrEventBusArn: {Type: String}
 
 Resources:
+  ForwardingDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+
   ForwardRole:
     Type: AWS::IAM::Role
     Properties:
@@ -35,6 +43,27 @@ Resources:
         - Id: DrRegionEventBus
           Arn: !Ref DrEventBusArn
           RoleArn: !GetAtt ForwardRole.Arn
+          RetryPolicy:
+            MaximumEventAgeInSeconds: 86400
+            MaximumRetryAttempts: 185
+          DeadLetterConfig:
+            Arn: !GetAtt ForwardingDeadLetterQueue.Arn
+
+  ForwardingDeadLetterQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues: [!Ref ForwardingDeadLetterQueue]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: events.amazonaws.com}
+            Action: sqs:SendMessage
+            Resource: !GetAtt ForwardingDeadLetterQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !GetAtt PrimaryAlarmForwarder.Arn
 
 Outputs:
   RuleArn: {Description: Primary cross-Region forwarding rule ARN., Value: !GetAtt PrimaryAlarmForwarder.Arn}
+  DeadLetterQueueUrl: {Description: Queue containing undeliverable cross-Region alarm events., Value: !Ref ForwardingDeadLetterQueue}

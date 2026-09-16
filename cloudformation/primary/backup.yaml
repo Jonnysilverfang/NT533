@@ -8,6 +8,10 @@ Parameters:
     Type: String
   DrVaultArn:
     Type: String
+  PrimaryBackupKmsKeyArn:
+    Type: String
+  DrBackupKmsKeyArn:
+    Type: String
   DatabaseArn:
     Type: String
   BackupSchedule:
@@ -36,16 +40,25 @@ Resources:
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              - Effect: Allow
+              - Sid: CreateBackupKmsGrants
+                Effect: Allow
                 Action:
                   - kms:CreateGrant
-                  - kms:DescribeKey
-                  - kms:Decrypt
-                  - kms:GenerateDataKey
-                Resource: '*'
+                Resource:
+                  - !Ref PrimaryBackupKmsKeyArn
+                  - !Ref DrBackupKmsKeyArn
                 Condition:
                   Bool:
                     kms:GrantIsForAWSResource: true
+              - Sid: UseBackupKmsKeys
+                Effect: Allow
+                Action:
+                  - kms:DescribeKey
+                  - kms:Decrypt
+                  - kms:GenerateDataKey
+                Resource:
+                  - !Ref PrimaryBackupKmsKeyArn
+                  - !Ref DrBackupKmsKeyArn
 
   BackupPlan:
     Type: AWS::Backup::BackupPlan

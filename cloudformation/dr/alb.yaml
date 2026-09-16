@@ -7,6 +7,7 @@ Parameters:
   PublicSubnetIds: {Type: 'List<AWS::EC2::Subnet::Id>'}
   AlbSecurityGroupId: {Type: AWS::EC2::SecurityGroup::Id}
   CertificateArn: {Type: String, Default: ''}
+  ContainerPort: {Type: Number, Default: 8080}
 
 Conditions:
   HasCertificate: !Not [!Equals [!Ref CertificateArn, '']]
@@ -27,7 +28,7 @@ Resources:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
       VpcId: !Ref VpcId
-      Port: 8080
+      Port: !Ref ContainerPort
       Protocol: HTTP
       TargetType: ip
       HealthCheckPath: /health
@@ -38,10 +39,10 @@ Resources:
       Matcher: {HttpCode: 200-399}
   ProductTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
-    Properties: {VpcId: !Ref VpcId, Port: 8080, Protocol: HTTP, TargetType: ip, HealthCheckPath: /health, TargetGroupAttributes: [{Key: deregistration_delay.timeout_seconds, Value: '30'}], Matcher: {HttpCode: 200-399}}
+    Properties: {VpcId: !Ref VpcId, Port: !Ref ContainerPort, Protocol: HTTP, TargetType: ip, HealthCheckPath: /health, TargetGroupAttributes: [{Key: deregistration_delay.timeout_seconds, Value: '30'}], Matcher: {HttpCode: 200-399}}
   OrderTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
-    Properties: {VpcId: !Ref VpcId, Port: 8080, Protocol: HTTP, TargetType: ip, HealthCheckPath: /health, TargetGroupAttributes: [{Key: deregistration_delay.timeout_seconds, Value: '30'}], Matcher: {HttpCode: 200-399}}
+    Properties: {VpcId: !Ref VpcId, Port: !Ref ContainerPort, Protocol: HTTP, TargetType: ip, HealthCheckPath: /health, TargetGroupAttributes: [{Key: deregistration_delay.timeout_seconds, Value: '30'}], Matcher: {HttpCode: 200-399}}
   HttpListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
@@ -92,3 +93,7 @@ Outputs:
   AuthTargetGroupArn: {Description: DR auth target group., Value: !Ref AuthTargetGroup}
   ProductTargetGroupArn: {Description: DR product target group., Value: !Ref ProductTargetGroup}
   OrderTargetGroupArn: {Description: DR order target group., Value: !Ref OrderTargetGroup}
+  LoadBalancerFullName: {Description: DR ALB CloudWatch dimension., Value: !GetAtt LoadBalancer.LoadBalancerFullName}
+  AuthTargetGroupFullName: {Description: DR auth target-group dimension., Value: !GetAtt AuthTargetGroup.TargetGroupFullName}
+  ProductTargetGroupFullName: {Description: DR product target-group dimension., Value: !GetAtt ProductTargetGroup.TargetGroupFullName}
+  OrderTargetGroupFullName: {Description: DR order target-group dimension., Value: !GetAtt OrderTargetGroup.TargetGroupFullName}

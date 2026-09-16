@@ -1,7 +1,10 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)] [string] $PrimaryArtifactBucket,
-    [Parameter(Mandatory)] [string] $DrArtifactBucket
+    [Parameter(Mandatory)] [string] $DrArtifactBucket,
+    [Parameter(Mandatory)]
+    [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')]
+    [string] $ReleaseVersion
 )
 
 $ErrorActionPreference = 'Stop'
@@ -23,7 +26,13 @@ aws cloudformation package `
     --region ap-southeast-1
 if ($LASTEXITCODE -ne 0) { throw 'DR packaging failed.' }
 
-aws s3 cp (Join-Path $outputDirectory 'dr-packaged.yaml') "s3://$DrArtifactBucket/packaged/dr-root.yaml" --region ap-southeast-1
+$drObjectKey = "releases/$ReleaseVersion/dr-root.yaml"
+aws s3api head-object --bucket $DrArtifactBucket --key $drObjectKey --region ap-southeast-1 2>$null | Out-Null
+if ($LASTEXITCODE -eq 0) {
+    throw "Immutable DR template already exists at s3://$DrArtifactBucket/$drObjectKey. Use a new ReleaseVersion."
+}
+
+aws s3 cp (Join-Path $outputDirectory 'dr-packaged.yaml') "s3://$DrArtifactBucket/$drObjectKey" --region ap-southeast-1
 if ($LASTEXITCODE -ne 0) { throw 'Uploading packaged DR root failed.' }
 
 aws cloudformation package `
@@ -33,6 +42,6 @@ aws cloudformation package `
     --region ap-southeast-1
 if ($LASTEXITCODE -ne 0) { throw 'Automation packaging failed.' }
 
-$drTemplateUrl = "https://$DrArtifactBucket.s3.ap-southeast-1.amazonaws.com/packaged/dr-root.yaml"
+$drTemplateUrl = "https://$DrArtifactBucket.s3.ap-southeast-1.amazonaws.com/$drObjectKey"
 Write-Host "Packaged templates: $outputDirectory"
 Write-Host "Set DrRuntimeTemplateUrl to: $drTemplateUrl"

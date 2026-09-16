@@ -9,6 +9,8 @@ Parameters:
   UpdateSecretRoleArn: {Type: String}
   CheckAlbRoleArn: {Type: String}
   ParseStackOutputsRoleArn: {Type: String}
+  ManageLockRoleArn: {Type: String}
+  LockTableName: {Type: String}
 
 Resources:
   CheckPrimaryFunction:
@@ -65,6 +67,18 @@ Resources:
       Role: !Ref ParseStackOutputsRoleArn
       Timeout: 10
       Code: lambda/parse-stack-outputs/
+  ManageLockFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-production-dr-manage-lock'
+      Runtime: python3.13
+      Handler: index.handler
+      Role: !Ref ManageLockRoleArn
+      Timeout: 15
+      Environment:
+        Variables:
+          LOCK_TABLE_NAME: !Ref LockTableName
+      Code: lambda/manage-lock/
 
 Outputs:
   CheckPrimaryFunctionArn: {Description: Check-primary function ARN., Value: !GetAtt CheckPrimaryFunction.Arn}
@@ -73,3 +87,4 @@ Outputs:
   UpdateSecretFunctionArn: {Description: Update-secret function ARN., Value: !GetAtt UpdateSecretFunction.Arn}
   CheckAlbFunctionArn: {Description: Check-ALB function ARN., Value: !GetAtt CheckAlbFunction.Arn}
   ParseStackOutputsFunctionArn: {Description: Parse-stack-outputs function ARN., Value: !GetAtt ParseStackOutputsFunction.Arn}
+  ManageLockFunctionArn: {Description: Singleton-lock function ARN., Value: !GetAtt ManageLockFunction.Arn}

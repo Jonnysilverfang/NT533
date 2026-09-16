@@ -9,6 +9,14 @@ Parameters:
   NotificationTopicArn: {Type: String}
 
 Resources:
+  AutomationDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+
   DrEventBus:
     Type: AWS::Events::EventBus
     Properties:
@@ -44,7 +52,12 @@ Resources:
         - Id: DrOrchestrator
           Arn: !Ref StateMachineArn
           RoleArn: !GetAtt StartExecutionRole.Arn
-          Input: '{"trigger":"alarm","simulate_failure":false,"skip_route53_switch":false}'
+          Input: '{"trigger":"alarm","simulate_failure":false,"test_mode":false,"skip_route53_switch":false}'
+          RetryPolicy:
+            MaximumEventAgeInSeconds: 86400
+            MaximumRetryAttempts: 185
+          DeadLetterConfig:
+            Arn: !GetAtt AutomationDeadLetterQueue.Arn
 
   WorkflowFailureRule:
     Type: AWS::Events::Rule
@@ -61,7 +74,30 @@ Resources:
       Targets:
         - Id: NotifyWorkflowFailure
           Arn: !Ref NotificationTopicArn
+          RetryPolicy:
+            MaximumEventAgeInSeconds: 86400
+            MaximumRetryAttempts: 185
+          DeadLetterConfig:
+            Arn: !GetAtt AutomationDeadLetterQueue.Arn
+
+  AutomationDeadLetterQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues: [!Ref AutomationDeadLetterQueue]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: events.amazonaws.com}
+            Action: sqs:SendMessage
+            Resource: !GetAtt AutomationDeadLetterQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn:
+                  - !GetAtt AlarmRule.Arn
+                  - !GetAtt WorkflowFailureRule.Arn
 
 Outputs:
   DrEventBusArn: {Description: Cross-Region target event bus ARN., Value: !GetAtt DrEventBus.Arn}
   DrEventBusName: {Description: DR event bus name., Value: !Ref DrEventBus}
+  DeadLetterQueueUrl: {Description: Queue containing undeliverable DR automation events., Value: !Ref AutomationDeadLetterQueue}

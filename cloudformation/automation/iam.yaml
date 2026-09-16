@@ -5,9 +5,12 @@ Parameters:
   ProjectName: {Type: String}
   DrBackupVaultArn: {Type: String}
   NotificationTopicArn: {Type: String}
+  NotificationKeyArn: {Type: String}
   ArtifactBucketArn: {Type: String}
   SourceCredentialSecretName: {Type: String}
   HostedZoneId: {Type: String}
+  LockTableArn: {Type: String}
+  DrBackupKmsKeyArn: {Type: String}
 
 Resources:
   CheckPrimaryRole:
@@ -46,6 +49,20 @@ Resources:
         Statement: [{Effect: Allow, Principal: {Service: backup.amazonaws.com}, Action: sts:AssumeRole}]
       ManagedPolicyArns:
         - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForRestores'
+      Policies:
+        - PolicyName: UseDrBackupKey
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [kms:Decrypt, kms:DescribeKey]
+                Resource: !Ref DrBackupKmsKeyArn
+              - Effect: Allow
+                Action: kms:CreateGrant
+                Resource: !Ref DrBackupKmsKeyArn
+                Condition:
+                  Bool:
+                    kms:GrantIsForAWSResource: true
 
   StartRestoreRole:
     Type: AWS::IAM::Role
@@ -62,6 +79,9 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: [backup:GetRecoveryPointRestoreMetadata, backup:StartRestoreJob]
+                Resource: '*'
+              - Effect: Allow
+                Action: rds:DescribeDBInstances
                 Resource: '*'
               - Effect: Allow
                 Action: iam:PassRole
@@ -111,6 +131,23 @@ Resources:
         Statement: [{Effect: Allow, Principal: {Service: lambda.amazonaws.com}, Action: sts:AssumeRole}]
       ManagedPolicyArns:
         - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+
+  ManageLockRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement: [{Effect: Allow, Principal: {Service: lambda.amazonaws.com}, Action: sts:AssumeRole}]
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: ManageSingletonLock
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:DeleteItem]
+                Resource: !Ref LockTableArn
 
   CloudFormationExecutionRole:
     Type: AWS::IAM::Role
@@ -262,6 +299,9 @@ Resources:
                 Resource: !Sub 'arn:${AWS::Partition}:route53:::hostedzone/${HostedZoneId}'
               - {Effect: Allow, Action: sns:Publish, Resource: !Ref NotificationTopicArn}
               - Effect: Allow
+                Action: [kms:Decrypt, 'kms:GenerateDataKey*']
+                Resource: !Ref NotificationKeyArn
+              - Effect: Allow
                 Action: [logs:CreateLogDelivery, logs:GetLogDelivery, logs:UpdateLogDelivery, logs:DeleteLogDelivery, logs:ListLogDeliveries, logs:PutResourcePolicy, logs:DescribeResourcePolicies, logs:DescribeLogGroups]
                 Resource: '*'
 
@@ -272,6 +312,7 @@ Outputs:
   UpdateSecretRoleArn: {Description: Runtime-secret Lambda role., Value: !GetAtt UpdateSecretRole.Arn}
   CheckAlbRoleArn: {Description: ALB-check Lambda role., Value: !GetAtt CheckAlbRole.Arn}
   ParseStackOutputsRoleArn: {Description: Stack-output parser Lambda role., Value: !GetAtt ParseStackOutputsRole.Arn}
+  ManageLockRoleArn: {Description: Singleton-lock Lambda role., Value: !GetAtt ManageLockRole.Arn}
   BackupRestoreRoleArn: {Description: Role assumed by AWS Backup restore job., Value: !GetAtt BackupRestoreRole.Arn}
   CloudFormationExecutionRoleArn: {Description: DR runtime stack execution role., Value: !GetAtt CloudFormationExecutionRole.Arn}
   OrchestratorRoleArn: {Description: Step Functions execution role., Value: !GetAtt OrchestratorRole.Arn}

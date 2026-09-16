@@ -9,11 +9,47 @@ Conditions:
   HasEmail: !Not [!Equals [!Ref NotificationEmail, '']]
 
 Resources:
+  NotificationKey:
+    Type: AWS::KMS::Key
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: !Sub '${ProjectName} DR notification encryption key'
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowAccountAdministration
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+          - Sid: AllowSnsEncryption
+            Effect: Allow
+            Principal:
+              Service:
+                - sns.amazonaws.com
+                - events.amazonaws.com
+                - states.amazonaws.com
+            Action: [kms:Decrypt, 'kms:GenerateDataKey*']
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+                kms:EncryptionContext:aws:sns:topicArn: !Sub 'arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:${ProjectName}-notifications'
+
+  NotificationKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub 'alias/${ProjectName}-dr-notifications'
+      TargetKeyId: !Ref NotificationKey
+
   NotificationTopic:
     Type: AWS::SNS::Topic
     Properties:
       TopicName: !Sub '${ProjectName}-notifications'
-      KmsMasterKeyId: alias/aws/sns
+      KmsMasterKeyId: !GetAtt NotificationKey.Arn
       Tags:
         - {Key: Environment, Value: production}
         - {Key: Project, Value: multi-region-dr}
@@ -43,3 +79,4 @@ Resources:
 
 Outputs:
   TopicArn: {Description: Encrypted DR notification topic ARN., Value: !Ref NotificationTopic}
+  TopicKeyArn: {Description: Customer-managed key ARN for DR notifications., Value: !GetAtt NotificationKey.Arn}

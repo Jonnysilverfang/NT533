@@ -10,6 +10,8 @@
   {"ParameterKey":"CertificateArn","ParameterValue":""},
   {"ParameterKey":"RepositoryPrefix","ParameterValue":"prod"},
   {"ParameterKey":"ImageTag","ParameterValue":"v1"},
+  {"ParameterKey":"DatabaseName","ParameterValue":"appdb"},
+  {"ParameterKey":"ContainerPort","ParameterValue":"8080"},
   {"ParameterKey":"EcsCpu","ParameterValue":"256"},
   {"ParameterKey":"EcsMemory","ParameterValue":"512"},
   {"ParameterKey":"ProductionDesiredCount","ParameterValue":"1"}

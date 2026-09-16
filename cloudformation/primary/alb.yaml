@@ -183,3 +183,9 @@ Outputs:
   AuthTargetGroupFullName:
     Description: Auth target group full name for CloudWatch dimensions.
     Value: !GetAtt AuthTargetGroup.TargetGroupFullName
+  ProductTargetGroupFullName:
+    Description: Product target group full name for CloudWatch dimensions.
+    Value: !GetAtt ProductTargetGroup.TargetGroupFullName
+  OrderTargetGroupFullName:
+    Description: Order target group full name for CloudWatch dimensions.
+    Value: !GetAtt OrderTargetGroup.TargetGroupFullName

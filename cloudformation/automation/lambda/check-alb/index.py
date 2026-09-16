@@ -17,7 +17,20 @@ def handler(event, _context):
             for description in descriptions
             if description.get("TargetHealth", {}).get("State") == "healthy"
         )
-        results[target_group_arn] = healthy
+        results[target_group_arn] = {
+            "healthy_count": healthy,
+            "targets": [
+                {
+                    "id": description.get("Target", {}).get("Id", "unknown"),
+                    "state": description.get("TargetHealth", {}).get("State", "unknown"),
+                    "reason": description.get("TargetHealth", {}).get("Reason", ""),
+                    "description": description.get("TargetHealth", {}).get(
+                        "Description", ""
+                    ),
+                }
+                for description in descriptions
+            ],
+        }
         all_healthy = all_healthy and healthy >= expected
 
-    return {"all_healthy": all_healthy, "healthy_counts": results}
+    return {"all_healthy": all_healthy, "target_groups": results}

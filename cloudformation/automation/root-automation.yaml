@@ -7,17 +7,22 @@ Parameters:
   PrimaryAlarmName: {Type: String}
   NotificationEmail: {Type: String, Default: ''}
   DrBackupVaultArn: {Type: String}
+  DrBackupKmsKeyArn: {Type: String}
   DrBackupVaultName: {Type: String, Default: prod-dr-backup-vault}
   ArtifactBucketArn: {Type: String}
   DrRuntimeTemplateUrl: {Type: String}
   SourceCredentialSecretName: {Type: String}
+  SourceDatabaseArn: {Type: String}
   HostedZoneId: {Type: String}
   DomainName: {Type: String}
   DbInstanceClass: {Type: String, Default: db.t4g.micro}
+  DatabaseName: {Type: String, Default: appdb}
+  ContainerPort: {Type: Number, Default: 8080}
   DrCertificateArn: {Type: String, Default: ''}
   RepositoryPrefix: {Type: String, Default: prod}
   ImageTag: {Type: String, Default: v1}
   ProductionDesiredCount: {Type: Number, Default: 1}
+  WorkflowTimeoutSeconds: {Type: Number, Default: 43200, MinValue: 3600, MaxValue: 86400}
 
 Resources:
   SnsStack:
@@ -28,6 +33,11 @@ Resources:
         ProjectName: !Ref ProjectName
         NotificationEmail: !Ref NotificationEmail
 
+  LockStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./lock.yaml
+
   IamStack:
     Type: AWS::CloudFormation::Stack
     Properties:
@@ -36,9 +46,12 @@ Resources:
         ProjectName: !Ref ProjectName
         DrBackupVaultArn: !Ref DrBackupVaultArn
         NotificationTopicArn: !GetAtt SnsStack.Outputs.TopicArn
+        NotificationKeyArn: !GetAtt SnsStack.Outputs.TopicKeyArn
         ArtifactBucketArn: !Ref ArtifactBucketArn
         SourceCredentialSecretName: !Ref SourceCredentialSecretName
         HostedZoneId: !Ref HostedZoneId
+        LockTableArn: !GetAtt LockStack.Outputs.TableArn
+        DrBackupKmsKeyArn: !Ref DrBackupKmsKeyArn
 
   LambdaStack:
     Type: AWS::CloudFormation::Stack
@@ -52,6 +65,8 @@ Resources:
         UpdateSecretRoleArn: !GetAtt IamStack.Outputs.UpdateSecretRoleArn
         CheckAlbRoleArn: !GetAtt IamStack.Outputs.CheckAlbRoleArn
         ParseStackOutputsRoleArn: !GetAtt IamStack.Outputs.ParseStackOutputsRoleArn
+        ManageLockRoleArn: !GetAtt IamStack.Outputs.ManageLockRoleArn
+        LockTableName: !GetAtt LockStack.Outputs.TableName
 
   StepFunctionsStack:
     Type: AWS::CloudFormation::Stack
@@ -67,6 +82,7 @@ Resources:
         UpdateSecretFunctionArn: !GetAtt LambdaStack.Outputs.UpdateSecretFunctionArn
         CheckAlbFunctionArn: !GetAtt LambdaStack.Outputs.CheckAlbFunctionArn
         ParseStackOutputsFunctionArn: !GetAtt LambdaStack.Outputs.ParseStackOutputsFunctionArn
+        ManageLockFunctionArn: !GetAtt LambdaStack.Outputs.ManageLockFunctionArn
         CloudFormationExecutionRoleArn: !GetAtt IamStack.Outputs.CloudFormationExecutionRoleArn
         BackupRestoreRoleArn: !GetAtt IamStack.Outputs.BackupRestoreRoleArn
         DrRuntimeTemplateUrl: !Ref DrRuntimeTemplateUrl
@@ -74,13 +90,17 @@ Resources:
         PrimaryAlarmName: !Ref PrimaryAlarmName
         DrBackupVaultName: !Ref DrBackupVaultName
         SourceCredentialSecretId: !Ref SourceCredentialSecretName
+        SourceDatabaseArn: !Ref SourceDatabaseArn
         DbInstanceClass: !Ref DbInstanceClass
+        DatabaseName: !Ref DatabaseName
+        ContainerPort: !Ref ContainerPort
         HostedZoneId: !Ref HostedZoneId
         DomainName: !Ref DomainName
         DrCertificateArn: !Ref DrCertificateArn
         RepositoryPrefix: !Ref RepositoryPrefix
         ImageTag: !Ref ImageTag
         ProductionDesiredCount: !Ref ProductionDesiredCount
+        WorkflowTimeoutSeconds: !Ref WorkflowTimeoutSeconds
 
   EventBridgeStack:
     Type: AWS::CloudFormation::Stack

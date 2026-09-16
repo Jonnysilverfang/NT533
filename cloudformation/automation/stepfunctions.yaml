@@ -11,6 +11,7 @@ Parameters:
   UpdateSecretFunctionArn: {Type: String}
   CheckAlbFunctionArn: {Type: String}
   ParseStackOutputsFunctionArn: {Type: String}
+  ManageLockFunctionArn: {Type: String}
   CloudFormationExecutionRoleArn: {Type: String}
   BackupRestoreRoleArn: {Type: String}
   DrRuntimeTemplateUrl: {Type: String}
@@ -19,9 +20,11 @@ Parameters:
   PrimaryAlarmName: {Type: String}
   DrBackupVaultName: {Type: String, Default: prod-dr-backup-vault}
   SourceCredentialSecretId: {Type: String}
+  SourceDatabaseArn: {Type: String}
   DbInstanceIdentifier: {Type: String, Default: prod-dr-restored-db}
   DbInstanceClass: {Type: String, Default: db.t4g.micro}
   DatabaseName: {Type: String, Default: appdb}
+  ContainerPort: {Type: Number, Default: 8080}
   HostedZoneId: {Type: String}
   DomainName: {Type: String}
   DrVpcCidr: {Type: String, Default: 10.20.0.0/16}
@@ -35,6 +38,7 @@ Parameters:
   RepositoryPrefix: {Type: String, Default: prod}
   ImageTag: {Type: String, Default: v1}
   ProductionDesiredCount: {Type: Number, Default: 1}
+  WorkflowTimeoutSeconds: {Type: Number, Default: 43200, MinValue: 3600, MaxValue: 86400}
 
 Resources:
   WorkflowLogGroup:
@@ -46,7 +50,7 @@ Resources:
   StateMachine:
     Type: AWS::StepFunctions::StateMachine
     Properties:
-      StateMachineName: prod-dr-orchestrator
+      StateMachineName: !Sub '${ProjectName}-orchestrator'
       StateMachineType: STANDARD
       RoleArn: !Ref StateMachineRoleArn
       LoggingConfiguration:
@@ -61,23 +65,43 @@ Resources:
         Fn::Sub: |
           {
             "Comment": "Low-cost backup-and-restore DR orchestration",
-            "TimeoutSeconds": 21600,
+            "TimeoutSeconds": ${WorkflowTimeoutSeconds},
             "StartAt": "ValidateTrigger",
             "States": {
               "ValidateTrigger": {
                 "Type": "Choice",
                 "Choices": [
-                  {"Variable": "$.trigger", "StringEquals": "alarm", "Next": "NotifyFailureDetected"},
-                  {"Variable": "$.trigger", "StringEquals": "manual-test", "Next": "NotifyFailureDetected"}
+                  {"Variable": "$.trigger", "StringEquals": "alarm", "Next": "AcquireDrLock"},
+                  {"Variable": "$.trigger", "StringEquals": "manual-test", "Next": "AcquireDrLock"}
                 ],
                 "Default": "InvalidTrigger"
               },
               "InvalidTrigger": {"Type": "Fail", "Error": "InvalidTrigger", "Cause": "Use EventBridge or the test script."},
+              "AcquireDrLock": {
+                "Type":"Task","Resource":"arn:${AWS::Partition}:states:::lambda:invoke",
+                "Parameters":{"FunctionName":"${ManageLockFunctionArn}","Payload":{"action":"acquire","owner.$":"$$.Execution.Id","ttl_seconds":${WorkflowTimeoutSeconds}}},
+                "ResultSelector":{"lock.$":"$.Payload"},"ResultPath":"$.dr_lock",
+                "Retry":[{"ErrorEquals":["Lambda.ServiceException","Lambda.TooManyRequestsException"],"IntervalSeconds":2,"MaxAttempts":4,"BackoffRate":2}],
+                "Catch":[{"ErrorEquals":["States.ALL"],"Next":"LockUnavailableFailure"}],
+                "Next":"LockAcquired"
+              },
+              "LockAcquired": {
+                "Type":"Choice","Choices":[{"Variable":"$.dr_lock.lock.acquired","BooleanEquals":true,"Next":"NotifyFailureDetected"}],
+                "Default":"NotifyAlreadyRunning"
+              },
+              "NotifyAlreadyRunning": {
+                "Type":"Task","Resource":"arn:${AWS::Partition}:states:::sns:publish",
+                "Parameters":{"TopicArn":"${NotificationTopicArn}","Subject":"DR execution suppressed","Message.$":"States.Format('Another DR execution already owns the singleton lock: {}', $.dr_lock.lock.owner)"},
+                "Catch":[{"ErrorEquals":["States.ALL"],"Next":"AlreadyRunning"}],
+                "Next":"AlreadyRunning"
+              },
+              "AlreadyRunning":{"Type":"Succeed"},
+              "LockUnavailableFailure":{"Type":"Fail","Error":"DrLockUnavailable","Cause":"Could not acquire the DR singleton lock."},
               "NotifyFailureDetected": {
                 "Type": "Task", "Resource": "arn:${AWS::Partition}:states:::sns:publish",
                 "Parameters": {"TopicArn": "${NotificationTopicArn}", "Subject": "Primary failure detected", "Message": "Primary alarm triggered; DR confirmation window started."},
                 "Retry": [{"ErrorEquals": ["States.ALL"], "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2}],
-                "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "NotifyFailure"}],
+                "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.notification_error", "Next": "ConfirmationWindow"}],
                 "Next": "ConfirmationWindow"
               },
               "ConfirmationWindow": {"Type": "Wait", "Seconds": 90, "Next": "RecheckPrimary"},
@@ -98,17 +122,20 @@ Resources:
               "NotifyPrimaryRecovered": {
                 "Type": "Task", "Resource": "arn:${AWS::Partition}:states:::sns:publish",
                 "Parameters": {"TopicArn": "${NotificationTopicArn}", "Subject": "DR cancelled", "Message": "Primary recovered during the 90-second confirmation window; no DR resources were created."},
-                "Next": "RecoveredWithoutDr"
+                "Catch": [{"ErrorEquals":["States.ALL"],"ResultPath":"$.notification_error","Next":"ReleaseLockRecovered"}],
+                "Next": "ReleaseLockRecovered"
               },
               "RecoveredWithoutDr": {"Type": "Succeed"},
               "NotifyWorkflowStarted": {
                 "Type": "Task", "Resource": "arn:${AWS::Partition}:states:::sns:publish",
                 "Parameters": {"TopicArn": "${NotificationTopicArn}", "Subject": "DR workflow started", "Message": "Primary failure confirmed. DR orchestration is proceeding."},
+                "Catch": [{"ErrorEquals":["States.ALL"],"ResultPath":"$.notification_error","Next":"NotifyStackCreationStarted"}],
                 "Next": "NotifyStackCreationStarted"
               },
               "NotifyStackCreationStarted": {
                 "Type": "Task", "Resource": "arn:${AWS::Partition}:states:::sns:publish",
                 "Parameters": {"TopicArn": "${NotificationTopicArn}", "Subject": "DR stack creation started", "Message": "Creating the on-demand Singapore network, ALB and zero-count ECS services."},
+                "Catch": [{"ErrorEquals":["States.ALL"],"ResultPath":"$.notification_error","Next":"CreateDrStack"}],
                 "Next": "CreateDrStack"
               },
               "CreateDrStack": {
@@ -129,6 +156,8 @@ Resources:
                     {"ParameterKey":"CertificateArn","ParameterValue":"${DrCertificateArn}"},
                     {"ParameterKey":"RepositoryPrefix","ParameterValue":"${RepositoryPrefix}"},
                     {"ParameterKey":"ImageTag","ParameterValue":"${ImageTag}"},
+                    {"ParameterKey":"DatabaseName","ParameterValue":"${DatabaseName}"},
+                    {"ParameterKey":"ContainerPort","ParameterValue":"${ContainerPort}"},
                     {"ParameterKey":"ProductionDesiredCount","ParameterValue":"${ProductionDesiredCount}"}
                   ],
                   "Tags": [{"Key":"Environment","Value":"production"},{"Key":"Project","Value":"multi-region-dr"},{"Key":"ManagedBy","Value":"step-functions"}]
@@ -169,11 +198,12 @@ Resources:
               "NotifyStackCreated": {
                 "Type": "Task", "Resource": "arn:${AWS::Partition}:states:::sns:publish",
                 "Parameters": {"TopicArn": "${NotificationTopicArn}", "Subject": "DR stack created", "Message": "VPC, ALB and zero-count ECS services are ready. Starting RDS restore."},
+                "Catch": [{"ErrorEquals":["States.ALL"],"ResultPath":"$.notification_error","Next":"FindLatestRecoveryPoint"}],
                 "Next": "FindLatestRecoveryPoint"
               },
               "FindLatestRecoveryPoint": {
                 "Type": "Task", "Resource": "arn:${AWS::Partition}:states:::lambda:invoke",
-                "Parameters": {"FunctionName": "${FindRecoveryPointFunctionArn}", "Payload": {"backup_vault_name": "${DrBackupVaultName}"}},
+                "Parameters": {"FunctionName": "${FindRecoveryPointFunctionArn}", "Payload": {"backup_vault_name": "${DrBackupVaultName}", "source_resource_arn": "${SourceDatabaseArn}"}},
                 "ResultSelector": {"point.$": "$.Payload"}, "ResultPath": "$.recovery",
                 "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 5, "MaxAttempts": 4, "BackoffRate": 2}],
                 "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "NotifyFailure"}],
@@ -185,7 +215,7 @@ Resources:
                   "recovery_point_arn.$": "$.recovery.point.recovery_point_arn", "backup_vault_name": "${DrBackupVaultName}",
                   "restore_role_arn": "${BackupRestoreRoleArn}", "db_instance_identifier": "${DbInstanceIdentifier}",
                   "db_instance_class": "${DbInstanceClass}", "db_subnet_group_name.$": "$.dr.outputs.DbSubnetGroupName",
-                  "db_security_group_id.$": "$.dr.outputs.DbSecurityGroupId"
+                  "db_security_group_id.$": "$.dr.outputs.DbSecurityGroupId", "test_mode.$": "$.test_mode"
                 }},
                 "ResultSelector": {"job.$": "$.Payload"}, "ResultPath": "$.restore",
                 "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 5, "MaxAttempts": 3, "BackoffRate": 2}],
@@ -195,6 +225,7 @@ Resources:
               "NotifyRestoreStarted": {
                 "Type": "Task", "Resource": "arn:${AWS::Partition}:states:::sns:publish",
                 "Parameters": {"TopicArn": "${NotificationTopicArn}", "Subject": "RDS restore started", "Message.$": "States.Format('Restore job {} started from {}', $.restore.job.restore_job_id, $.recovery.point.creation_date)"},
+                "Catch": [{"ErrorEquals":["States.ALL"],"ResultPath":"$.notification_error","Next":"WaitForRestore"}],
                 "Next": "WaitForRestore"
               },
               "WaitForRestore": {"Type": "Wait", "Seconds": 60, "Next": "DescribeRestoreJob"},
@@ -231,6 +262,7 @@ Resources:
               "NotifyRdsRestored": {
                 "Type":"Task","Resource":"arn:${AWS::Partition}:states:::sns:publish",
                 "Parameters":{"TopicArn":"${NotificationTopicArn}","Subject":"RDS restored","Message":"AWS Backup restore completed and the Singapore RDS instance is available."},
+                "Catch":[{"ErrorEquals":["States.ALL"],"ResultPath":"$.notification_error","Next":"UpdateRuntimeSecret"}],
                 "Next":"UpdateRuntimeSecret"
               },
               "UpdateRuntimeSecret": {
@@ -257,6 +289,7 @@ Resources:
               "NotifyEcsStarted": {
                 "Type":"Task","Resource":"arn:${AWS::Partition}:states:::sns:publish",
                 "Parameters":{"TopicArn":"${NotificationTopicArn}","Subject":"ECS started","Message":"All three Singapore ECS services were scaled from zero; waiting for ALB target health."},
+                "Catch":[{"ErrorEquals":["States.ALL"],"ResultPath":"$.notification_error","Next":"InitializeAlbAttempts"}],
                 "Next":"InitializeAlbAttempts"
               },
               "InitializeAlbAttempts": {"Type":"Pass","Parameters":{"count":0},"ResultPath":"$.alb_attempt","Next":"WaitForAlb"},
@@ -278,6 +311,7 @@ Resources:
               "NotifyAlbHealthy": {
                 "Type":"Task","Resource":"arn:${AWS::Partition}:states:::sns:publish",
                 "Parameters":{"TopicArn":"${NotificationTopicArn}","Subject":"DR ALB healthy","Message":"Restored database and all three DR target groups are healthy."},
+                "Catch":[{"ErrorEquals":["States.ALL"],"ResultPath":"$.notification_error","Next":"RecheckBeforeCutover"}],
                 "Next":"RecheckBeforeCutover"
               },
               "RecheckBeforeCutover": {
@@ -297,7 +331,8 @@ Resources:
               "NotifyRecoveredBeforeCutover": {
                 "Type": "Task", "Resource": "arn:${AWS::Partition}:states:::sns:publish",
                 "Parameters": {"TopicArn": "${NotificationTopicArn}", "Subject": "Primary recovered before cutover", "Message": "DR runtime is healthy but DNS was not changed because the primary alarm recovered. Operator review is required."},
-                "Next": "RecoveredWithoutDr"
+                "Catch": [{"ErrorEquals":["States.ALL"],"ResultPath":"$.notification_error","Next":"ReleaseLockRecovered"}],
+                "Next": "ReleaseLockRecovered"
               },
               "SkipDnsRequested": {
                 "Type":"Choice",
@@ -314,23 +349,45 @@ Resources:
               "NotifyTestComplete": {
                 "Type":"Task","Resource":"arn:${AWS::Partition}:states:::sns:publish",
                 "Parameters":{"TopicArn":"${NotificationTopicArn}","Subject":"DR test ready","Message":"DR stack, database and ECS are healthy. Route 53 switch was intentionally skipped."},
-                "Next":"DrSucceeded"
+                "Catch":[{"ErrorEquals":["States.ALL"],"ResultPath":"$.notification_error","Next":"ReleaseLockSuccess"}],
+                "Next":"ReleaseLockSuccess"
               },
               "NotifyDrSuccess": {
                 "Type":"Task","Resource":"arn:${AWS::Partition}:states:::sns:publish",
                 "Parameters":{"TopicArn":"${NotificationTopicArn}","Subject":"DR success","Message":"Secondary Route 53 record created after database, ECS and ALB validation. Traffic can fail over to Singapore."},
-                "Next":"DrSucceeded"
+                "Catch":[{"ErrorEquals":["States.ALL"],"ResultPath":"$.notification_error","Next":"ReleaseLockSuccess"}],
+                "Next":"ReleaseLockSuccess"
               },
               "NotifyRoute53Switched": {
                 "Type":"Task","Resource":"arn:${AWS::Partition}:states:::sns:publish",
                 "Parameters":{"TopicArn":"${NotificationTopicArn}","Subject":"Route 53 switched","Message":"The Singapore SECONDARY failover alias was created after all health gates passed."},
+                "Catch":[{"ErrorEquals":["States.ALL"],"ResultPath":"$.notification_error","Next":"NotifyDrSuccess"}],
                 "Next":"NotifyDrSuccess"
+              },
+              "ReleaseLockRecovered": {
+                "Type":"Task","Resource":"arn:${AWS::Partition}:states:::lambda:invoke",
+                "Parameters":{"FunctionName":"${ManageLockFunctionArn}","Payload":{"action":"release","owner.$":"$$.Execution.Id"}},
+                "ResultPath":"$.lock_release","Retry":[{"ErrorEquals":["Lambda.ServiceException","Lambda.TooManyRequestsException"],"IntervalSeconds":2,"MaxAttempts":3,"BackoffRate":2}],
+                "Catch":[{"ErrorEquals":["States.ALL"],"Next":"RecoveredWithoutDr"}],"Next":"RecoveredWithoutDr"
+              },
+              "ReleaseLockSuccess": {
+                "Type":"Task","Resource":"arn:${AWS::Partition}:states:::lambda:invoke",
+                "Parameters":{"FunctionName":"${ManageLockFunctionArn}","Payload":{"action":"release","owner.$":"$$.Execution.Id"}},
+                "ResultPath":"$.lock_release","Retry":[{"ErrorEquals":["Lambda.ServiceException","Lambda.TooManyRequestsException"],"IntervalSeconds":2,"MaxAttempts":3,"BackoffRate":2}],
+                "Catch":[{"ErrorEquals":["States.ALL"],"Next":"DrSucceeded"}],"Next":"DrSucceeded"
               },
               "DrSucceeded": {"Type":"Succeed"},
               "NotifyFailure": {
                 "Type":"Task","Resource":"arn:${AWS::Partition}:states:::sns:publish",
                 "Parameters":{"TopicArn":"${NotificationTopicArn}","Subject":"DR failed","Message.$":"States.Format('DR workflow failed: {}', $.error.Cause)"},
-                "Next":"DrFailed"
+                "Catch":[{"ErrorEquals":["States.ALL"],"ResultPath":"$.notification_error","Next":"ReleaseLockFailure"}],
+                "Next":"ReleaseLockFailure"
+              },
+              "ReleaseLockFailure": {
+                "Type":"Task","Resource":"arn:${AWS::Partition}:states:::lambda:invoke",
+                "Parameters":{"FunctionName":"${ManageLockFunctionArn}","Payload":{"action":"release","owner.$":"$$.Execution.Id"}},
+                "ResultPath":"$.lock_release","Retry":[{"ErrorEquals":["Lambda.ServiceException","Lambda.TooManyRequestsException"],"IntervalSeconds":2,"MaxAttempts":3,"BackoffRate":2}],
+                "Catch":[{"ErrorEquals":["States.ALL"],"Next":"DrFailed"}],"Next":"DrFailed"
               },
               "DrFailed": {"Type":"Fail","Error":"DrWorkflowFailed","Cause":"Inspect Step Functions history and CloudFormation events."}
             }

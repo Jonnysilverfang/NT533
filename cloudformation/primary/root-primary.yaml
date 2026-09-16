@@ -44,6 +44,10 @@ Parameters:
   DbInstanceClass:
     Type: String
     Default: db.t4g.micro
+  DbEngineVersion:
+    Type: String
+    Default: '16'
+    AllowedPattern: '^16(?:\.[0-9]+)?$'
   EcsCpu:
     Type: String
     Default: '256'
@@ -63,6 +67,10 @@ Parameters:
     Type: String
     Default: prod-primary-backup-vault
   DrBackupVaultArn:
+    Type: String
+  PrimaryBackupKmsKeyArn:
+    Type: String
+  DrBackupKmsKeyArn:
     Type: String
   BackupSchedule:
     Type: String
@@ -139,6 +147,7 @@ Resources:
         DbSecurityGroupId: !GetAtt SecurityStack.Outputs.DbSecurityGroupId
         DbName: !Ref DbName
         DbInstanceClass: !Ref DbInstanceClass
+        EngineVersion: !Ref DbEngineVersion
         BackupRetentionDays: !Ref BackupRetentionDays
         DeletionProtection: !Ref EnableDeletionProtection
 
@@ -181,6 +190,8 @@ Resources:
         ProjectName: !Ref ProjectName
         PrimaryVaultName: !Ref PrimaryBackupVaultName
         DrVaultArn: !Ref DrBackupVaultArn
+        PrimaryBackupKmsKeyArn: !Ref PrimaryBackupKmsKeyArn
+        DrBackupKmsKeyArn: !Ref DrBackupKmsKeyArn
         DatabaseArn: !GetAtt RdsStack.Outputs.DatabaseArn
         BackupSchedule: !Ref BackupSchedule
         RetentionDays: !Ref BackupRetentionDays
@@ -205,6 +216,8 @@ Resources:
         ProjectName: !Ref ProjectName
         LoadBalancerFullName: !GetAtt AlbStack.Outputs.LoadBalancerFullName
         AuthTargetGroupFullName: !GetAtt AlbStack.Outputs.AuthTargetGroupFullName
+        ProductTargetGroupFullName: !GetAtt AlbStack.Outputs.ProductTargetGroupFullName
+        OrderTargetGroupFullName: !GetAtt AlbStack.Outputs.OrderTargetGroupFullName
         ClusterName: !GetAtt EcsStack.Outputs.ClusterName
         DatabaseIdentifier: !GetAtt RdsStack.Outputs.DatabaseIdentifier
         Route53HealthCheckId: !GetAtt Route53Stack.Outputs.Route53HealthCheckId
@@ -226,6 +239,9 @@ Outputs:
   DatabaseSecretArn:
     Description: Primary DB secret ARN replicated to DR.
     Value: !GetAtt RdsStack.Outputs.DatabaseSecretArn
+  DatabaseArn:
+    Description: Primary RDS ARN used to scope DR recovery-point selection.
+    Value: !GetAtt RdsStack.Outputs.DatabaseArn
   PrimaryUnavailableAlarmName:
     Description: CloudWatch alarm used to trigger DR confirmation.
     Value: !GetAtt MonitoringStack.Outputs.PrimaryUnavailableAlarmName

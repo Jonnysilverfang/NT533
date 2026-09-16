@@ -1,0 +1,26 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: DynamoDB singleton lock for DR orchestration concurrency control.
+
+Resources:
+  DrLockTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - {AttributeName: lock_name, AttributeType: S}
+      KeySchema:
+        - {AttributeName: lock_name, KeyType: HASH}
+      SSESpecification:
+        SSEEnabled: true
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+      Tags:
+        - {Key: Environment, Value: production}
+        - {Key: Project, Value: multi-region-dr}
+
+Outputs:
+  TableName: {Description: DR singleton-lock table name., Value: !Ref DrLockTable}
+  TableArn: {Description: DR singleton-lock table ARN., Value: !GetAtt DrLockTable.Arn}

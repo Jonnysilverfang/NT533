@@ -16,6 +16,11 @@ def handler(event, _context):
 
     source = secrets.get_secret_value(SecretId=event["source_secret_id"])
     credentials = json.loads(source["SecretString"])
+    missing = [key for key in ("username", "password") if not credentials.get(key)]
+    if missing:
+        raise RuntimeError(
+            "Source credential secret is missing required keys: " + ", ".join(missing)
+        )
     db = instances[0]
     runtime = {
         "username": credentials["username"],

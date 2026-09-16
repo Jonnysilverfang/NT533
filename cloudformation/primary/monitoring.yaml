@@ -8,6 +8,10 @@ Parameters:
     Type: String
   AuthTargetGroupFullName:
     Type: String
+  ProductTargetGroupFullName:
+    Type: String
+  OrderTargetGroupFullName:
+    Type: String
   ClusterName:
     Type: String
   DatabaseIdentifier:
@@ -18,10 +22,10 @@ Parameters:
     Type: String
 
 Resources:
-  PrimaryUnavailableAlarm:
+  AuthUnavailableAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub '${ProjectName}-primary-application-unavailable'
+      AlarmName: !Sub '${ProjectName}-primary-auth-unavailable'
       AlarmDescription: Auth target group has no healthy hosts for 3 of 5 minutes.
       Namespace: AWS/ApplicationELB
       MetricName: HealthyHostCount
@@ -37,6 +41,50 @@ Resources:
       Threshold: 1
       ComparisonOperator: LessThanThreshold
       TreatMissingData: breaching
+
+  ProductUnavailableAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-primary-product-unavailable'
+      Namespace: AWS/ApplicationELB
+      MetricName: HealthyHostCount
+      Dimensions:
+        - {Name: LoadBalancer, Value: !Ref LoadBalancerFullName}
+        - {Name: TargetGroup, Value: !Ref ProductTargetGroupFullName}
+      Statistic: Minimum
+      Period: 60
+      EvaluationPeriods: 5
+      DatapointsToAlarm: 3
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+
+  OrderUnavailableAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-primary-order-unavailable'
+      Namespace: AWS/ApplicationELB
+      MetricName: HealthyHostCount
+      Dimensions:
+        - {Name: LoadBalancer, Value: !Ref LoadBalancerFullName}
+        - {Name: TargetGroup, Value: !Ref OrderTargetGroupFullName}
+      Statistic: Minimum
+      Period: 60
+      EvaluationPeriods: 5
+      DatapointsToAlarm: 3
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+
+  PrimaryUnavailableAlarm:
+    Type: AWS::CloudWatch::CompositeAlarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-primary-application-unavailable'
+      AlarmDescription: Any microservice target group unavailable after its 3-of-5-minute gate.
+      AlarmRule: !Sub >-
+        ALARM("${AuthUnavailableAlarm}") OR
+        ALARM("${ProductUnavailableAlarm}") OR
+        ALARM("${OrderUnavailableAlarm}")
 
   Dashboard:
     Type: AWS::CloudWatch::Dashboard

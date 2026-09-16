@@ -37,6 +37,12 @@ Parameters:
   ImageTag:
     Type: String
     Default: v1
+  DatabaseName:
+    Type: String
+    Default: appdb
+  ContainerPort:
+    Type: Number
+    Default: 8080
   EcsCpu:
     Type: String
     Default: '256'
@@ -70,6 +76,7 @@ Resources:
       Parameters:
         ProjectName: !Ref ProjectName
         VpcId: !GetAtt NetworkStack.Outputs.VpcId
+        ContainerPort: !Ref ContainerPort
 
   AlbStack:
     Type: AWS::CloudFormation::Stack
@@ -81,6 +88,7 @@ Resources:
         PublicSubnetIds: !GetAtt NetworkStack.Outputs.PublicSubnetIds
         AlbSecurityGroupId: !GetAtt SecurityStack.Outputs.AlbSecurityGroupId
         CertificateArn: !Ref CertificateArn
+        ContainerPort: !Ref ContainerPort
 
   IamStack:
     Type: AWS::CloudFormation::Stack
@@ -97,6 +105,8 @@ Resources:
         ProjectName: !Ref ProjectName
         RepositoryPrefix: !Ref RepositoryPrefix
         ImageTag: !Ref ImageTag
+        DatabaseName: !Ref DatabaseName
+        ContainerPort: !Ref ContainerPort
         AppSubnetIds: !GetAtt NetworkStack.Outputs.AppSubnetIds
         EcsSecurityGroupId: !GetAtt SecurityStack.Outputs.EcsSecurityGroupId
         TaskExecutionRoleArn: !GetAtt IamStack.Outputs.TaskExecutionRoleArn
@@ -115,6 +125,10 @@ Resources:
       Parameters:
         ProjectName: !Ref ProjectName
         ClusterName: !GetAtt EcsStack.Outputs.ClusterName
+        LoadBalancerFullName: !GetAtt AlbStack.Outputs.LoadBalancerFullName
+        AuthTargetGroupFullName: !GetAtt AlbStack.Outputs.AuthTargetGroupFullName
+        ProductTargetGroupFullName: !GetAtt AlbStack.Outputs.ProductTargetGroupFullName
+        OrderTargetGroupFullName: !GetAtt AlbStack.Outputs.OrderTargetGroupFullName
 
 Outputs:
   DrStackName:

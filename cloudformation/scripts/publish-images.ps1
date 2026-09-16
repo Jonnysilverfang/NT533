@@ -1,7 +1,9 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)] [string] $AccountId,
-    [string] $ImageTag = 'v1'
+    [string] $ImageTag = 'v1',
+    [ValidatePattern('^[a-z0-9]+(?:[._-][a-z0-9]+)*$')]
+    [string] $RepositoryPrefix = 'prod'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -17,7 +19,7 @@ docker build -t $localImage (Join-Path $repoRoot 'app\demo')
 if ($LASTEXITCODE -ne 0) { throw 'Docker build failed.' }
 
 foreach ($service in @('auth', 'product', 'order')) {
-    $remoteImage = "$registry/prod-$service`:$ImageTag"
+    $remoteImage = "$registry/$RepositoryPrefix-$service`:$ImageTag"
     docker tag $localImage $remoteImage
     docker push $remoteImage
     if ($LASTEXITCODE -ne 0) { throw "Push failed for $remoteImage" }

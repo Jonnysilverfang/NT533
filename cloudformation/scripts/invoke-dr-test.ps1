@@ -6,7 +6,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $skipDns = if ($AllowRoute53Switch) { 'false' } else { 'true' }
-$inputJson = "{`"trigger`":`"manual-test`",`"simulate_failure`":true,`"skip_route53_switch`":$skipDns}"
+$inputJson = "{`"trigger`":`"manual-test`",`"simulate_failure`":true,`"test_mode`":true,`"skip_route53_switch`":$skipDns}"
 $executionName = "manual-dr-test-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
 
 aws stepfunctions start-execution `

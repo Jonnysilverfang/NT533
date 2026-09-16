@@ -4,15 +4,20 @@
   {"ParameterKey":"PrimaryAlarmName","ParameterValue":"prod-dr-primary-application-unavailable"},
   {"ParameterKey":"NotificationEmail","ParameterValue":"REPLACE_WITH_TEAM_EMAIL"},
   {"ParameterKey":"DrBackupVaultArn","ParameterValue":"REPLACE_WITH_DR_BACKUP_VAULT_ARN"},
+  {"ParameterKey":"DrBackupKmsKeyArn","ParameterValue":"REPLACE_WITH_DR_BACKUP_KMS_KEY_ARN"},
   {"ParameterKey":"DrBackupVaultName","ParameterValue":"prod-dr-backup-vault"},
   {"ParameterKey":"ArtifactBucketArn","ParameterValue":"REPLACE_WITH_DR_ARTIFACT_BUCKET_ARN"},
   {"ParameterKey":"DrRuntimeTemplateUrl","ParameterValue":"REPLACE_WITH_PACKAGED_DR_ROOT_HTTPS_URL"},
   {"ParameterKey":"SourceCredentialSecretName","ParameterValue":"prod-dr-production-db-credentials"},
+  {"ParameterKey":"SourceDatabaseArn","ParameterValue":"REPLACE_WITH_PRIMARY_DATABASE_ARN"},
   {"ParameterKey":"HostedZoneId","ParameterValue":"REPLACE_WITH_HOSTED_ZONE_ID"},
   {"ParameterKey":"DomainName","ParameterValue":"app.example.com"},
   {"ParameterKey":"DbInstanceClass","ParameterValue":"db.t4g.micro"},
+  {"ParameterKey":"DatabaseName","ParameterValue":"appdb"},
+  {"ParameterKey":"ContainerPort","ParameterValue":"8080"},
   {"ParameterKey":"DrCertificateArn","ParameterValue":""},
   {"ParameterKey":"RepositoryPrefix","ParameterValue":"prod"},
   {"ParameterKey":"ImageTag","ParameterValue":"v1"},
-  {"ParameterKey":"ProductionDesiredCount","ParameterValue":"1"}
+  {"ParameterKey":"ProductionDesiredCount","ParameterValue":"1"},
+  {"ParameterKey":"WorkflowTimeoutSeconds","ParameterValue":"43200"}
 ]
