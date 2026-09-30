@@ -26,7 +26,7 @@ def handler(event, _context):
         "username": credentials["username"],
         "password": credentials["password"],
         "host": db["Endpoint"]["Address"],
-        "port": db["Endpoint"]["Port"],
+        "port": str(db["Endpoint"]["Port"]),
         "dbname": event.get("database_name", "appdb"),
     }
     secrets.put_secret_value(

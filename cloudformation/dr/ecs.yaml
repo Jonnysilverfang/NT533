@@ -24,7 +24,7 @@ Resources:
     Properties:
       Name: !Sub '${ProjectName}-production-dr-runtime'
       Description: Populated by DR workflow after RDS restore; never contains template credentials.
-      SecretString: '{"status":"pending-restore"}'
+      SecretString: '{"status":"pending-restore","host":"","port":"5432","username":"","password":"","dbname":"appdb"}'
       Tags:
         - {Key: Environment, Value: production}
         - {Key: Project, Value: multi-region-dr}
@@ -65,6 +65,8 @@ Resources:
           Environment: [{Name: SERVICE_NAME, Value: auth}, {Name: DB_NAME, Value: !Ref DatabaseName}, {Name: PORT, Value: !Sub '${ContainerPort}'}]
           Secrets:
             - {Name: DB_HOST, ValueFrom: !Sub '${RuntimeSecret}:host::'}
+            - {Name: DB_PORT, ValueFrom: !Sub '${RuntimeSecret}:port::'}
+            - {Name: DB_USER, ValueFrom: !Sub '${RuntimeSecret}:username::'}
             - {Name: DB_USERNAME, ValueFrom: !Sub '${RuntimeSecret}:username::'}
             - {Name: DB_PASSWORD, ValueFrom: !Sub '${RuntimeSecret}:password::'}
           HealthCheck:
@@ -95,6 +97,8 @@ Resources:
           Environment: [{Name: SERVICE_NAME, Value: product}, {Name: DB_NAME, Value: !Ref DatabaseName}, {Name: PORT, Value: !Sub '${ContainerPort}'}]
           Secrets:
             - {Name: DB_HOST, ValueFrom: !Sub '${RuntimeSecret}:host::'}
+            - {Name: DB_PORT, ValueFrom: !Sub '${RuntimeSecret}:port::'}
+            - {Name: DB_USER, ValueFrom: !Sub '${RuntimeSecret}:username::'}
             - {Name: DB_USERNAME, ValueFrom: !Sub '${RuntimeSecret}:username::'}
             - {Name: DB_PASSWORD, ValueFrom: !Sub '${RuntimeSecret}:password::'}
           HealthCheck:
@@ -125,6 +129,8 @@ Resources:
           Environment: [{Name: SERVICE_NAME, Value: order}, {Name: DB_NAME, Value: !Ref DatabaseName}, {Name: PORT, Value: !Sub '${ContainerPort}'}]
           Secrets:
             - {Name: DB_HOST, ValueFrom: !Sub '${RuntimeSecret}:host::'}
+            - {Name: DB_PORT, ValueFrom: !Sub '${RuntimeSecret}:port::'}
+            - {Name: DB_USER, ValueFrom: !Sub '${RuntimeSecret}:username::'}
             - {Name: DB_USERNAME, ValueFrom: !Sub '${RuntimeSecret}:username::'}
             - {Name: DB_PASSWORD, ValueFrom: !Sub '${RuntimeSecret}:password::'}
           HealthCheck:

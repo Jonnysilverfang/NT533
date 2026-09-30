@@ -249,14 +249,29 @@ aws cloudformation deploy `
 ```
 
 #### 3.4 Kiểm tra hệ thống Primary hoạt động bình thường:
-Truy cập qua trình duyệt hoặc terminal:
+Lấy Primary ALB DNS:
 ```powershell
-curl http://$domainName/health
-# Trả về: {"status": "healthy", "service": "...", "database": "reachable"}
+$primaryAlb = aws cloudformation describe-stacks `
+  --stack-name prod-dr-primary `
+  --region $primaryRegion `
+  --query "Stacks[0].Outputs[?OutputKey=='PrimaryAlbDnsName'].OutputValue" `
+  --output text
+```
 
-curl http://$domainName/auth
-curl http://$domainName/product
-curl http://$domainName/order
+Truy cập trực tiếp qua Primary ALB DNS hoặc domain:
+```powershell
+curl http://$primaryAlb/health
+# Trả về: {"status": "healthy", "service": "product", "database": "connected", "region": "ap-southeast-2"}
+
+curl http://$primaryAlb/products
+# Đọc danh sách products từ PostgreSQL
+
+curl -X POST http://$primaryAlb/products `
+  -H "Content-Type: application/json" `
+  -d '{"name":"DR Test Product","price":999.99}'
+
+curl http://$primaryAlb/auth
+curl http://$primaryAlb/order
 ```
 
 ---
@@ -338,7 +353,272 @@ Chỉ thực hiện trong khung giờ bảo trì được phê duyệt:
 
 ---
 
-## 6. Đo lường RTO / RPO Thực tế
+## 6. Real Data Disaster Recovery Demo
+
+Quy trình diễn tập phục hồi thảm họa với **dữ liệu PostgreSQL thực tế**, chứng minh tính toàn vẹn dữ liệu từ Sydney (`ap-southeast-2`) sang Singapore (`ap-southeast-1`) mà **không sử dụng Route 53 DNS cutover** (truy cập và kiểm thử trực tiếp thông qua DNS của Application Load Balancer).
+
+Demo chứng minh đầy đủ chu trình:
+`Data Sydney -> AWS Backup -> Restore Singapore -> ECS Singapore -> Đọc lại đúng data cũ`
+
+```text
+Create data Sydney
+        ↓
+Backup
+        ↓
+Cross-region copy
+        ↓
+Restore Singapore
+        ↓
+Update Runtime Secret
+        ↓
+Start ECS
+        ↓
+ALB health check
+        ↓
+GET /products
+        ↓
+Verify recovered data
+```
+
+---
+
+### Cách 1: Chạy tự động toàn bộ bằng Script (Khuyến nghị)
+
+Script `cloudformation/scripts/test-real-data-dr.ps1` tự động thực hiện từ đầu đến cuối 4 giai đoạn (A -> B -> C -> D), kiểm tra điều kiện an toàn, so sánh mốc thời gian recovery point và in báo cáo kết quả:
+
+```powershell
+.\cloudformation\scripts\test-real-data-dr.ps1 `
+  -PrimaryStackName prod-dr-primary `
+  -AutomationStackName prod-dr-automation `
+  -TestProductName "BEFORE-DR-TEST-001" `
+  -TestProductPrice 533.00
+```
+
+Nếu muốn script tự động trigger backup on-demand ngay lập tức và đợi copy sang Singapore:
+```powershell
+.\cloudformation\scripts\test-real-data-dr.ps1 `
+  -PrimaryStackName prod-dr-primary `
+  -AutomationStackName prod-dr-automation `
+  -TestProductName "BEFORE-DR-TEST-001" `
+  -TestProductPrice 533.00 `
+  -TriggerOnDemandBackup
+```
+
+---
+
+### Cách 2: Thực hiện thủ công từng bước (Manual Step-by-Step)
+
+#### Phase A — Primary: Tạo dữ liệu kiểm thử tại Sydney
+
+1. **Lấy Primary ALB DNS:**
+```powershell
+$primaryAlb = aws cloudformation describe-stacks `
+  --stack-name prod-dr-primary `
+  --region ap-southeast-2 `
+  --query "Stacks[0].Outputs[?OutputKey=='PrimaryAlbDnsName'].OutputValue" `
+  --output text
+
+Write-Host "Primary ALB DNS: $primaryAlb"
+```
+
+2. **Kiểm tra trạng thái sức khỏe Primary (kết nối PostgreSQL thật):**
+```bash
+curl http://$primaryAlb/health
+```
+*Phản hồi mong đợi (HTTP 200):*
+```json
+{
+  "status": "healthy",
+  "service": "product",
+  "database": "connected",
+  "region": "ap-southeast-2"
+}
+```
+
+3. **Chèn một record kiểm thử có định danh duy nhất:**
+```bash
+curl -X POST http://$primaryAlb/products \
+  -H "Content-Type: application/json" \
+  -d '{"name": "BEFORE-DR-TEST-001", "price": 533.00}'
+```
+*Phản hồi mong đợi (HTTP 201):*
+```json
+{
+  "id": 1,
+  "name": "BEFORE-DR-TEST-001",
+  "price": 533.0,
+  "created_at": "2026-09-30T13:30:00"
+}
+```
+
+4. **Xác nhận record đã được ghi vào RDS Sydney:**
+```bash
+curl http://$primaryAlb/products
+```
+
+---
+
+#### Phase B — Backup: Sao lưu và Copy Recovery Point sang Singapore
+
+1. **Trigger On-Demand Backup tại Sydney (hoặc chờ Backup Plan định kỳ):**
+```powershell
+$sourceDbArn = aws cloudformation describe-stacks `
+  --stack-name prod-dr-primary `
+  --region ap-southeast-2 `
+  --query "Stacks[0].Outputs[?OutputKey=='DatabaseArn'].OutputValue" `
+  --output text
+
+$drVaultArn = aws cloudformation describe-stacks `
+  --stack-name prod-dr-dr-baseline `
+  --region ap-southeast-1 `
+  --query "Stacks[0].Outputs[?OutputKey=='BackupVaultArn'].OutputValue" `
+  --output text
+
+$backupRoleArn = aws cloudformation describe-stacks `
+  --stack-name prod-dr-primary `
+  --region ap-southeast-2 `
+  --query "Stacks[0].Outputs[?OutputKey=='BackupServiceRoleArn'].OutputValue" `
+  --output text
+
+aws backup start-backup-job `
+  --backup-vault-name prod-primary-backup-vault `
+  --resource-arn $sourceDbArn `
+  --iam-role-arn $backupRoleArn `
+  --region ap-southeast-2 `
+  --copy-actions "DestinationBackupVaultArn=$drVaultArn,Lifecycle={DeleteAfterDays=2}"
+```
+
+2. **Kiểm tra Recovery Point tại Singapore Vault (`prod-dr-backup-vault`):**
+> ⚠️ **CỰC KỲ QUAN TRỌNG:** Không được restore recovery point cũ hơn thời điểm tạo test record. Phải đảm bảo:
+> `RecoveryPointCreationDate > TestRecordCreationTime`
+
+```powershell
+aws backup list-recovery-points-by-backup-vault `
+  --backup-vault-name prod-dr-backup-vault `
+  --by-resource-type RDS `
+  --region ap-southeast-1 `
+  --query "RecoveryPoints[?Status=='COMPLETED'].[RecoveryPointArn, CreationDate]" `
+  --output table
+```
+
+---
+
+#### Phase C — DR: Kích hoạt Step Functions khôi phục tại Singapore
+
+Khởi chạy Step Functions State Machine với tham số an toàn `skip_route53_switch = true`:
+
+```powershell
+$stateMachineArn = aws cloudformation describe-stacks `
+  --stack-name prod-dr-automation `
+  --region ap-southeast-1 `
+  --query "Stacks[0].Outputs[?OutputKey=='StateMachineArn'].OutputValue" `
+  --output text
+
+$inputPayload = @{
+    trigger = "manual-test"
+    simulate_failure = $true
+    test_mode = $true
+    skip_route53_switch = $true
+    SkipRoute53Switch = $true
+} | ConvertTo-Json -Compress
+
+aws stepfunctions start-execution `
+  --state-machine-arn $stateMachineArn `
+  --name "real-data-dr-$(Get-Date -Format 'yyyyMMdd-HHmmss')" `
+  --input $inputPayload `
+  --region ap-southeast-1
+```
+
+Theo dõi tiến trình trong AWS Console hoặc CLI. Quá trình gồm:
+1. Dựng DR CloudFormation Stack (VPC, Subnets, SG, ALB, ECS desiredCount=0).
+2. Tìm Recovery Point mới nhất trong vault Singapore.
+3. AWS Backup khôi phục RDS PostgreSQL (`prod-dr-restored-db`).
+4. Chờ RDS đạt trạng thái `available`.
+5. Lambda `update-secret` cập nhật Runtime Secret (`host`, `port`, `username`, `password`, `dbname`).
+6. Scale ECS Fargate services lên `desiredCount = 1`.
+7. ALB Target Group health check xác nhận `/health` trả HTTP 200 (database `connected`).
+8. Bỏ qua bước Route 53 DNS switch và kết thúc trạng thái `DrSucceeded`.
+
+---
+
+#### Phase D — Verification: Xác thực dữ liệu trên DR ALB Singapore
+
+1. **Lấy Singapore DR ALB DNS:**
+```powershell
+$drAlb = aws cloudformation describe-stacks `
+  --stack-name prod-dr-runtime-production `
+  --region ap-southeast-1 `
+  --query "Stacks[0].Outputs[?OutputKey=='DrAlbDnsName'].OutputValue" `
+  --output text
+
+Write-Host "DR ALB DNS: $drAlb"
+```
+
+2. **Kiểm tra sức khỏe Application tại Singapore:**
+```bash
+curl http://$drAlb/health
+```
+*Phản hồi mong đợi (HTTP 200):*
+```json
+{
+  "status": "healthy",
+  "service": "product",
+  "database": "connected",
+  "region": "ap-southeast-1"
+}
+```
+
+3. **Đọc dữ liệu đã phục hồi từ Singapore PostgreSQL:**
+```bash
+curl http://$drAlb/products
+```
+
+4. **Đọc trực tiếp record vừa tạo theo ID:**
+```bash
+curl http://$drAlb/products/1
+```
+
+5. **Kết quả đạt tiêu chuẩn (PASS):**
+```text
+================================
+REAL DATA DR TEST
+================================
+
+Primary Region: ap-southeast-2
+DR Region:      ap-southeast-1
+
+Primary record:
+BEFORE-DR-TEST-001
+
+Recovery Point:
+arn:aws:backup:ap-southeast-1:411509276671:recovery-point:819f727c-...
+
+Recovery Point Time:
+2026-09-30T13:35:12.000Z
+
+Restored RDS:
+prod-dr-restored-db
+
+DR RDS Endpoint:
+prod-dr-restored-db.cb8x...ap-southeast-1.rds.amazonaws.com:5432
+
+DR ALB:
+prod-dr-dr-alb-1234567890.ap-southeast-1.elb.amazonaws.com
+
+Database health:
+PASS
+
+Recovered record:
+BEFORE-DR-TEST-001
+
+RESULT:
+DR DATA RECOVERY PASS
+================================
+```
+
+---
+
+## 7. Đo lường RTO / RPO Thực tế
 
 Trong báo cáo kỹ thuật, các mốc thời gian phải được trích xuất chính xác từ lịch sử thực thi của Step Functions và AWS Backup:
 - **T0 — Thời điểm bắt đầu sự cố:** Timestamp sự kiện `ExecutionStarted` của Step Functions.

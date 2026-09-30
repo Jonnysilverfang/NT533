@@ -2,7 +2,7 @@ import boto3
 
 
 def handler(event, _context):
-    if event.get("simulate_failure", False):
+    if event.get("simulate_failure", False) or event.get("test_mode", False):
         return {
             "still_failed": True,
             "alarm_state": "SIMULATED",

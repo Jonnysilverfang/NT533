@@ -129,7 +129,7 @@ Resources:
       Priority: 10
       Conditions:
         - Field: path-pattern
-          Values: [/auth, '/auth/*', /health]
+          Values: [/auth, '/auth/*']
       Actions:
         - Type: forward
           TargetGroupArn: !Ref AuthTargetGroup
@@ -141,7 +141,7 @@ Resources:
       Priority: 20
       Conditions:
         - Field: path-pattern
-          Values: [/product, '/product/*']
+          Values: [/product, '/product/*', /products, '/products/*', /health]
       Actions:
         - Type: forward
           TargetGroupArn: !Ref ProductTargetGroup

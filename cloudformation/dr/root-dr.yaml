@@ -149,6 +149,9 @@ Outputs:
   LoadBalancerDnsName:
     Description: DR ALB DNS name.
     Value: !GetAtt AlbStack.Outputs.LoadBalancerDnsName
+  DrAlbDnsName:
+    Description: DR ALB DNS name for direct testing.
+    Value: !GetAtt AlbStack.Outputs.LoadBalancerDnsName
   LoadBalancerCanonicalHostedZoneId:
     Description: DR ALB canonical hosted zone ID.
     Value: !GetAtt AlbStack.Outputs.LoadBalancerCanonicalHostedZoneId

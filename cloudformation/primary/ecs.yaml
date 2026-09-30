@@ -132,11 +132,15 @@ Resources:
               Value: auth
             - Name: DB_HOST
               Value: !Ref DatabaseEndpoint
+            - Name: DB_PORT
+              Value: '5432'
             - Name: DB_NAME
               Value: !Ref DatabaseName
             - Name: PORT
               Value: !Sub '${ContainerPort}'
           Secrets:
+            - Name: DB_USER
+              ValueFrom: !Sub '${DatabaseSecretArn}:username::'
             - Name: DB_USERNAME
               ValueFrom: !Sub '${DatabaseSecretArn}:username::'
             - Name: DB_PASSWORD
@@ -178,9 +182,11 @@ Resources:
           Environment:
             - {Name: SERVICE_NAME, Value: product}
             - {Name: DB_HOST, Value: !Ref DatabaseEndpoint}
+            - {Name: DB_PORT, Value: '5432'}
             - {Name: DB_NAME, Value: !Ref DatabaseName}
             - {Name: PORT, Value: !Sub '${ContainerPort}'}
           Secrets:
+            - {Name: DB_USER, ValueFrom: !Sub '${DatabaseSecretArn}:username::'}
             - {Name: DB_USERNAME, ValueFrom: !Sub '${DatabaseSecretArn}:username::'}
             - {Name: DB_PASSWORD, ValueFrom: !Sub '${DatabaseSecretArn}:password::'}
           HealthCheck:
@@ -220,9 +226,11 @@ Resources:
           Environment:
             - {Name: SERVICE_NAME, Value: order}
             - {Name: DB_HOST, Value: !Ref DatabaseEndpoint}
+            - {Name: DB_PORT, Value: '5432'}
             - {Name: DB_NAME, Value: !Ref DatabaseName}
             - {Name: PORT, Value: !Sub '${ContainerPort}'}
           Secrets:
+            - {Name: DB_USER, ValueFrom: !Sub '${DatabaseSecretArn}:username::'}
             - {Name: DB_USERNAME, ValueFrom: !Sub '${DatabaseSecretArn}:username::'}
             - {Name: DB_PASSWORD, ValueFrom: !Sub '${DatabaseSecretArn}:password::'}
           HealthCheck:

@@ -69,14 +69,14 @@ Resources:
     Properties:
       ListenerArn: !If [HasCertificate, !Ref HttpsListener, !Ref HttpListener]
       Priority: 10
-      Conditions: [{Field: path-pattern, Values: [/auth, '/auth/*', /health]}]
+      Conditions: [{Field: path-pattern, Values: [/auth, '/auth/*']}]
       Actions: [{Type: forward, TargetGroupArn: !Ref AuthTargetGroup}]
   ProductRule:
     Type: AWS::ElasticLoadBalancingV2::ListenerRule
     Properties:
       ListenerArn: !If [HasCertificate, !Ref HttpsListener, !Ref HttpListener]
       Priority: 20
-      Conditions: [{Field: path-pattern, Values: [/product, '/product/*']}]
+      Conditions: [{Field: path-pattern, Values: [/product, '/product/*', /products, '/products/*', /health]}]
       Actions: [{Type: forward, TargetGroupArn: !Ref ProductTargetGroup}]
   OrderRule:
     Type: AWS::ElasticLoadBalancingV2::ListenerRule
