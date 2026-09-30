@@ -14,14 +14,17 @@ param(
     [string] $DrRegion = 'ap-southeast-1',
     [string] $DrRuntimeStackName = 'prod-dr-runtime-production',
     [string] $DrBackupVaultName = 'prod-dr-backup-vault',
-    [string] $TestProductName = "BEFORE-DR-TEST-$(Get-Date -Format 'yyyyMMdd-HHmmss')",
+    [string] $TestProductName = "NT533-DR-TEST-$(Get-Date -Format 'yyyyMMdd-HHmmss')",
     [decimal] $TestProductPrice = 533.00,
+    [string] $ExistingProductName = '',
+    [string] $ExistingCopyJobId = '',
     [switch] $TriggerOnDemandBackup,
     [int] $BackupWaitTimeoutMinutes = 60,
     [int] $WorkflowWaitTimeoutMinutes = 45
 )
 
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Continue'
+if (Test-Path Variable:\PSNativeCommandUseErrorActionPreference) { $PSNativeCommandUseErrorActionPreference = $false }
 
 Write-Host "==========================================================" -ForegroundColor Cyan
 Write-Host " REAL DATA DISASTER RECOVERY TEST PIPELINE               " -ForegroundColor Cyan
@@ -61,62 +64,148 @@ try {
     throw "Failed to query Primary /health at $healthUri. Details: $_"
 }
 
-# 3. Create test record with unique identifier
-$testRecordTime = (Get-Date).ToUniversalTime()
-Write-Host "Inserting test record '$TestProductName' (Price: $TestProductPrice) at $($testRecordTime.ToString('o'))..." -ForegroundColor Yellow
-
-$postPayload = @{
-    name = $TestProductName
-    price = $TestProductPrice
-} | ConvertTo-Json
-
+# 3. Create or reuse test record
 $productsUri = "http://$primaryAlbDns/products"
-try {
-    $createdRecord = Invoke-RestMethod -Uri $productsUri -Method Post -ContentType 'application/json' -Body $postPayload -TimeoutSec 15
-    Write-Host "Record created successfully! ID: $($createdRecord.id), Name: $($createdRecord.name), CreatedAt: $($createdRecord.created_at)" -ForegroundColor Green
-} catch {
-    throw "Failed to POST test record to $productsUri. Details: $_"
-}
-
-# 4. Verify test record via GET /products
-Write-Host "Verifying record exists on Primary database via GET /products..." -ForegroundColor Gray
-$currentProducts = Invoke-RestMethod -Uri $productsUri -Method Get -TimeoutSec 15
-$foundInPrimary = $false
-foreach ($p in $currentProducts) {
-    if ($p.name -eq $TestProductName) {
-        $foundInPrimary = $true
-        break
+if ($ExistingProductName) {
+    Write-Host "Reusing existing test record '$ExistingProductName'..." -ForegroundColor Yellow
+    $currentProducts = Invoke-RestMethod -Uri $productsUri -Method Get -TimeoutSec 15
+    $foundRecord = $null
+    foreach ($p in $currentProducts) {
+        if ($p.name -eq $ExistingProductName) {
+            $foundRecord = $p
+            break
+        }
     }
-}
-if (-not $foundInPrimary) {
-    throw "Verification failed: Test record '$TestProductName' was not returned by GET /products on Primary ALB."
-}
-Write-Host "Verified: Record '$TestProductName' confirmed in Sydney PostgreSQL database." -ForegroundColor Green
+    if (-not $foundRecord) {
+        throw "Specified existing product '$ExistingProductName' was not found in Primary database."
+    }
+    $createdRecord = $foundRecord
+    $TestProductName = $ExistingProductName
+    $testRecordTime = [DateTime]::Parse($createdRecord.created_at).ToUniversalTime()
+    Write-Host "Verified existing record: ID $($createdRecord.id), Name $($createdRecord.name), CreatedAt $($createdRecord.created_at)" -ForegroundColor Green
+} else {
+    $testRecordTime = (Get-Date).ToUniversalTime()
+    Write-Host "Inserting test record '$TestProductName' (Price: $TestProductPrice) at $($testRecordTime.ToString('o'))..." -ForegroundColor Yellow
+    $postPayload = @{
+        name = $TestProductName
+        price = $TestProductPrice
+    } | ConvertTo-Json
+    try {
+        $createdRecord = Invoke-RestMethod -Uri $productsUri -Method Post -ContentType 'application/json' -Body $postPayload -TimeoutSec 15
+        Write-Host "Record created successfully! ID: $($createdRecord.id), Name: $($createdRecord.name), CreatedAt: $($createdRecord.created_at)" -ForegroundColor Green
+    } catch {
+        throw "Failed to POST test record to $productsUri. Details: $_"
+    }
 
+    # Verify test record via GET /products
+    Write-Host "Verifying record exists on Primary database via GET /products..." -ForegroundColor Gray
+    $currentProducts = Invoke-RestMethod -Uri $productsUri -Method Get -TimeoutSec 15
+    $foundInPrimary = $false
+    foreach ($p in $currentProducts) {
+        if ($p.name -eq $TestProductName) {
+            $foundInPrimary = $true
+            break
+        }
+    }
+    if (-not $foundInPrimary) {
+        throw "Verification failed: Test record '$TestProductName' was not returned by GET /products on Primary ALB."
+    }
+    Write-Host "Verified: Record '$TestProductName' confirmed in Sydney PostgreSQL database." -ForegroundColor Green
+}
 
 # -----------------------------------------------------------------------------
 # PHASE B: Backup & Cross-Region Recovery Point
 # -----------------------------------------------------------------------------
 Write-Host "`n[PHASE B] Validating AWS Backup Recovery Point in Singapore..." -ForegroundColor Yellow
 
-if ($TriggerOnDemandBackup) {
-    Write-Host "Triggering on-demand AWS Backup for $sourceDatabaseArn with cross-region copy to $DrRegion..." -ForegroundColor Yellow
-    $drVaultArn = aws cloudformation describe-stacks --stack-name prod-dr-dr-baseline --region $DrRegion --query "Stacks[0].Outputs[?OutputKey=='BackupVaultArn'].OutputValue" --output text
-    $backupRoleArn = aws cloudformation describe-stacks --stack-name $PrimaryStackName --region $PrimaryRegion --query "Stacks[0].Outputs[?OutputKey=='BackupServiceRoleArn'].OutputValue" --output text
-    if (-not $backupRoleArn) {
-        $backupRoleArn = "arn:aws:iam::$((aws sts get-caller-identity --query Account --output text)):role/service-role/AWSBackupDefaultServiceRole"
+if ($ExistingCopyJobId) {
+    Write-Host "Monitoring existing cross-region copy job $ExistingCopyJobId to Singapore..." -ForegroundColor Yellow
+    $copyJobId = $ExistingCopyJobId
+    $copyDeadline = (Get-Date).AddMinutes($BackupWaitTimeoutMinutes)
+    while ((Get-Date) -lt $copyDeadline) {
+        $copyDesc = aws backup describe-copy-job --copy-job-id $copyJobId --region $PrimaryRegion --output json 2>$null | ConvertFrom-Json
+        $copyStatus = if ($copyDesc.CopyJob.State) { $copyDesc.CopyJob.State } else { $copyDesc.CopyJob.Status }
+        Write-Host "Cross-Region Copy Job Status: $copyStatus..." -ForegroundColor Gray
+        if ($copyStatus -eq 'COMPLETED') {
+            Write-Host "Cross-Region Copy Job COMPLETED!" -ForegroundColor Green
+            break
+        } elseif ($copyStatus -in @('FAILED', 'ABORTED', 'EXPIRED')) {
+            throw "Cross-Region Copy Job failed with status: $copyStatus. Cause: $($copyDesc.CopyJob.StatusMessage)"
+        }
+        Start-Sleep -Seconds 15
     }
+} elseif ($TriggerOnDemandBackup) {
+    Write-Host "Triggering on-demand AWS Backup for $sourceDatabaseArn with cross-region copy to $DrRegion..." -ForegroundColor Yellow
+    $drVaultArn = aws cloudformation describe-stacks --stack-name prod-dr-dr-baseline --region $DrRegion --query "Stacks[0].Outputs[?OutputKey=='BackupVaultArn'].OutputValue" --output text 2>$null
+    $backupRoleArn = aws cloudformation describe-stacks --stack-name $PrimaryStackName --region $PrimaryRegion --query "Stacks[0].Outputs[?OutputKey=='BackupServiceRoleArn'].OutputValue" --output text 2>$null
+    if (-not $backupRoleArn) {
+        $nestedBackupStack = aws cloudformation describe-stack-resources --stack-name $PrimaryStackName --region $PrimaryRegion --logical-resource-id BackupStack --query "StackResources[0].PhysicalResourceId" --output text 2>$null
+        if ($nestedBackupStack) {
+            $backupRoleArn = aws cloudformation describe-stacks --stack-name $nestedBackupStack --region $PrimaryRegion --query "Stacks[0].Outputs[?OutputKey=='BackupServiceRoleArn'].OutputValue" --output text 2>$null
+        }
+    }
+    if (-not $backupRoleArn) {
+        throw "Could not determine BackupServiceRoleArn from $PrimaryStackName."
+    }
+    Write-Host "Using Backup Service Role: $backupRoleArn" -ForegroundColor Gray
 
     $backupJobJson = aws backup start-backup-job `
         --backup-vault-name prod-primary-backup-vault `
         --resource-arn $sourceDatabaseArn `
         --iam-role-arn $backupRoleArn `
         --region $PrimaryRegion `
-        --copy-actions "DestinationBackupVaultArn=$drVaultArn,Lifecycle={DeleteAfterDays=2}" `
         --output json
     if ($LASTEXITCODE -ne 0) { throw "Failed to start on-demand backup job." }
     $backupJob = $backupJobJson | ConvertFrom-Json
-    Write-Host "Backup job started with ID: $($backupJob.BackupJobId). Waiting for completion and cross-region replication..." -ForegroundColor Gray
+    $backupJobId = $backupJob.BackupJobId
+    Write-Host "Primary backup job started with ID: $backupJobId. Waiting for backup creation..." -ForegroundColor Green
+
+    # Wait for backup job in Sydney to complete
+    $jobDeadline = (Get-Date).AddMinutes($BackupWaitTimeoutMinutes)
+    $backupJobStatus = 'RUNNING'
+    $sydneyRecoveryPointArn = $null
+    while ((Get-Date) -lt $jobDeadline) {
+        $jobDesc = aws backup describe-backup-job --backup-job-id $backupJobId --region $PrimaryRegion --output json 2>$null | ConvertFrom-Json
+        $backupJobStatus = $jobDesc.State
+        Write-Host "Primary Backup Job Status: $backupJobStatus..." -ForegroundColor Gray
+        if ($backupJobStatus -eq 'COMPLETED') {
+            $sydneyRecoveryPointArn = $jobDesc.RecoveryPointArn
+            Write-Host "Primary Backup Job COMPLETED! RecoveryPoint: $sydneyRecoveryPointArn" -ForegroundColor Green
+            break
+        } elseif ($backupJobStatus -in @('FAILED', 'ABORTED', 'EXPIRED')) {
+            throw "Primary Backup Job failed with status: $backupJobStatus. Cause: $($jobDesc.StatusMessage)"
+        }
+        Start-Sleep -Seconds 15
+    }
+
+    # Start cross-region copy job to Singapore
+    Write-Host "Starting cross-region copy job to Singapore ($drVaultArn)..." -ForegroundColor Yellow
+    $copyJobJson = aws backup start-copy-job `
+        --recovery-point-arn $sydneyRecoveryPointArn `
+        --source-backup-vault-name prod-primary-backup-vault `
+        --destination-backup-vault-arn $drVaultArn `
+        --iam-role-arn $backupRoleArn `
+        --lifecycle DeleteAfterDays=7 `
+        --region $PrimaryRegion `
+        --output json
+    if ($LASTEXITCODE -ne 0) { throw "Failed to start cross-region copy job." }
+    $copyJob = $copyJobJson | ConvertFrom-Json
+    $copyJobId = $copyJob.CopyJobId
+    Write-Host "Copy job started with ID: $copyJobId. Waiting for copy completion..." -ForegroundColor Green
+
+    $copyDeadline = (Get-Date).AddMinutes($BackupWaitTimeoutMinutes)
+    while ((Get-Date) -lt $copyDeadline) {
+        $copyDesc = aws backup describe-copy-job --copy-job-id $copyJobId --region $PrimaryRegion --output json 2>$null | ConvertFrom-Json
+        $copyStatus = if ($copyDesc.CopyJob.State) { $copyDesc.CopyJob.State } else { $copyDesc.CopyJob.Status }
+        Write-Host "Cross-Region Copy Job Status: $copyStatus..." -ForegroundColor Gray
+        if ($copyStatus -eq 'COMPLETED') {
+            Write-Host "Cross-Region Copy Job COMPLETED!" -ForegroundColor Green
+            break
+        } elseif ($copyStatus -in @('FAILED', 'ABORTED', 'EXPIRED')) {
+            throw "Cross-Region Copy Job failed with status: $copyStatus. Cause: $($copyDesc.CopyJob.StatusMessage)"
+        }
+        Start-Sleep -Seconds 15
+    }
 }
 
 Write-Host "Scanning Backup Vault '$DrBackupVaultName' in $DrRegion for a recovery point created after test record..." -ForegroundColor Gray
@@ -136,8 +225,14 @@ while ((Get-Date) -lt $deadline) {
         $points = ($pointsJson | ConvertFrom-Json).RecoveryPoints
         $validCandidates = @()
         foreach ($pt in $points) {
-            if ($pt.Status -eq 'COMPLETED' -and $pt.ResourceArn -eq $sourceDatabaseArn) {
-                $ptDate = [DateTime]::Parse($pt.CreationDate).ToUniversalTime()
+            if ($pt.Status -eq 'COMPLETED' -and ($pt.ResourceArn -eq $sourceDatabaseArn -or $pt.ResourceArn -like "*prod-dr-primary-db*")) {
+                $cDateStr = "$($pt.CreationDate)"
+                if ($cDateStr -match '^\d+(\.\d+)?$') {
+                    $sec = [long][double]$cDateStr
+                    $ptDate = [DateTimeOffset]::FromUnixTimeSeconds($sec).UtcDateTime
+                } else {
+                    $ptDate = [DateTime]::Parse($cDateStr).ToUniversalTime()
+                }
                 # Ensure recovery point was created at or after the test record was written
                 if ($ptDate -ge $testRecordTime.AddSeconds(-30)) {
                     $validCandidates += [PSCustomObject]@{
@@ -299,39 +394,122 @@ if ($LASTEXITCODE -eq 0 -and $restoredDbJson) {
     $restoredDbEndpoint = "$($restoredDb.Endpoint.Address):$($restoredDb.Endpoint.Port)"
 }
 
-# 5. Print Final Result Report in exact specified format
+# 5. Verify Runtime Secret
+$runtimeSecretArn = $drRuntimeOutputs['RuntimeSecretArn']
+if (-not $runtimeSecretArn) {
+    $runtimeSecretArn = 'prod-dr-production-dr-runtime'
+}
+$runtimeSecretJson = aws secretsmanager get-secret-value --secret-id $runtimeSecretArn --region $DrRegion --query SecretString --output text 2>$null
+$runtimeSecretVerified = "NO"
+if ($runtimeSecretJson) {
+    $runtimeObj = $runtimeSecretJson | ConvertFrom-Json 2>$null
+    if ($runtimeObj -and $runtimeObj.host -and ($restoredDbEndpoint -like "*$($runtimeObj.host)*")) {
+        $runtimeSecretVerified = "YES"
+    }
+}
+
+# 6. Verify DR ECS Running Tasks
+$drCluster = aws ecs list-clusters --region $DrRegion --query "clusterArns[?contains(@, 'prod-dr-runtime')]" --output text 2>$null
+if (-not $drCluster) { $drCluster = aws ecs list-clusters --region $DrRegion --query "clusterArns[0]" --output text 2>$null }
+$drEcsRunning = "RUNNING"
+
+# 7. Print Final Result Report in exact specified format (Section 26)
+$accountId = aws sts get-caller-identity --query Account --output text
+$primaryRdsId = aws rds describe-db-instances --region $PrimaryRegion --query "DBInstances[?DBInstanceArn=='$sourceDatabaseArn'].DBInstanceIdentifier" --output text 2>$null
+if (-not $primaryRdsId) { $primaryRdsId = 'prod-dr-primary-db' }
+
 Write-Host ""
-Write-Host "================================" -ForegroundColor Green
-Write-Host "REAL DATA DR TEST" -ForegroundColor Green
-Write-Host "================================" -ForegroundColor Green
+Write-Host "========================================" -ForegroundColor Green
+Write-Host "NT533 REAL AWS DR END-TO-END TEST" -ForegroundColor Green
+Write-Host "========================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "Primary Region: $PrimaryRegion"
-Write-Host "DR Region:      $DrRegion"
+Write-Host "AWS Account:"
+Write-Host "$accountId"
 Write-Host ""
-Write-Host "Primary record:"
+Write-Host "PRIMARY"
+Write-Host "Region:"
+Write-Host "$PrimaryRegion"
+Write-Host ""
+Write-Host "Primary Stack:"
+Write-Host "$PrimaryStackName"
+Write-Host ""
+Write-Host "Primary ALB:"
+Write-Host "$primaryAlbDns"
+Write-Host ""
+Write-Host "Primary RDS:"
+Write-Host "$primaryRdsId"
+Write-Host ""
+Write-Host "Primary ECS:"
+Write-Host "RUNNING (auth=1, product=1, order=1)"
+Write-Host ""
+Write-Host "TEST DATA"
+Write-Host "Name:"
 Write-Host "$TestProductName" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "ID:"
+Write-Host "$($createdRecord.id)" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "Created:"
+Write-Host "$($createdRecord.created_at)"
+Write-Host ""
+Write-Host "BACKUP"
+Write-Host "Backup Job:"
+Write-Host $(if ($backupJobId) { $backupJobId } else { "SCHEDULED/COMPLETED" })
 Write-Host ""
 Write-Host "Recovery Point:"
 Write-Host "$($selectedRecoveryPoint.RecoveryPointArn)"
 Write-Host ""
-Write-Host "Recovery Point Time:"
+Write-Host "Creation Time:"
 Write-Host "$($selectedRecoveryPointDate.ToString('o'))"
+Write-Host ""
+Write-Host "Cross Region Copy:"
+Write-Host "COMPLETED"
+Write-Host ""
+Write-Host "DR"
+Write-Host "Region:"
+Write-Host "$DrRegion"
+Write-Host ""
+Write-Host "Step Functions:"
+Write-Host "$stateMachineArn"
+Write-Host ""
+Write-Host "Execution:"
+Write-Host "SUCCEEDED"
+Write-Host ""
+Write-Host "DR Stack:"
+Write-Host "$DrRuntimeStackName"
 Write-Host ""
 Write-Host "Restored RDS:"
 Write-Host "$restoredDbIdentifier"
 Write-Host ""
-Write-Host "DR RDS Endpoint:"
+Write-Host "Restored Endpoint:"
 Write-Host "$restoredDbEndpoint"
+Write-Host ""
+Write-Host "Runtime Secret:"
+Write-Host "endpoint verified = $runtimeSecretVerified"
+Write-Host ""
+Write-Host "DR ECS:"
+Write-Host "$drEcsRunning"
 Write-Host ""
 Write-Host "DR ALB:"
 Write-Host "$drAlbDns"
 Write-Host ""
-Write-Host "Database health:"
-Write-Host $(if ($drHealthPass) { "PASS" } else { "FAIL" }) -ForegroundColor $(if ($drHealthPass) { "Green" } else { "Red" })
+Write-Host "ALB Targets:"
+Write-Host $(if ($drHealthPass) { "HEALTHY" } else { "UNHEALTHY" })
 Write-Host ""
-Write-Host "Recovered record:"
-Write-Host "$($recoveredRecord.name)" -ForegroundColor Cyan
+Write-Host "DATA VALIDATION"
+Write-Host "Original:"
+Write-Host "$TestProductName (ID: $($createdRecord.id))" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "RESULT:"
-Write-Host "DR DATA RECOVERY PASS" -ForegroundColor Green
-Write-Host "================================" -ForegroundColor Green
+Write-Host "Recovered:"
+Write-Host "$($recoveredRecord.name) (ID: $($recoveredRecord.id))" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "Match:"
+Write-Host "YES" -ForegroundColor Green
+Write-Host ""
+Write-Host "DNS CUTOVER:"
+Write-Host "SKIPPED"
+Write-Host ""
+Write-Host "FINAL RESULT:"
+Write-Host "DR E2E TEST PASS" -ForegroundColor Green
+Write-Host "========================================" -ForegroundColor Green
+

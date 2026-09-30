@@ -112,7 +112,12 @@ def ensure_schema():
 
 def check_db_health():
     if not DB_HOST:
-        return True, "not-configured", None
+        log_event(
+            "error",
+            "Database health check failed: DB_HOST is not configured",
+            operation="health_check",
+        )
+        return False, "missing-db-host", "DB_HOST is not configured"
     try:
         ensure_schema()
         conn = get_db_connection()
