@@ -52,7 +52,7 @@ Resources:
         - Id: DrOrchestrator
           Arn: !Ref StateMachineArn
           RoleArn: !GetAtt StartExecutionRole.Arn
-          Input: '{"trigger":"alarm","simulate_failure":false,"test_mode":false,"skip_route53_switch":false}'
+          Input: '{"trigger":"alarm","simulate_failure":false,"test_mode":false,"skip_route53_switch":true}'
           RetryPolicy:
             MaximumEventAgeInSeconds: 86400
             MaximumRetryAttempts: 185

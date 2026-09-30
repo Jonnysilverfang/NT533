@@ -12,7 +12,8 @@ def handler(event, _context):
     region = event["primary_region"]
     alarm_name = event["alarm_name"]
     response = boto3.client("cloudwatch", region_name=region).describe_alarms(
-        AlarmNames=[alarm_name]
+        AlarmNames=[alarm_name],
+        AlarmTypes=["CompositeAlarm", "MetricAlarm"],
     )
     alarms = response.get("MetricAlarms", []) + response.get("CompositeAlarms", [])
     if len(alarms) != 1:
