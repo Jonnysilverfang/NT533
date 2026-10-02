@@ -8,7 +8,7 @@ Dự án này triển khai giải pháp **Disaster Recovery (DR) Multi-Region** 
 
 ## 1. Mô hình Kiến trúc Hệ thống
 
-![Mô hình kiến trúc Disaster Recovery Multi-Region](./image.jpg)
+![Mô hình kiến trúc Disaster Recovery Multi-Region](./NT533.jpg)
 
 ### 1.1 Cơ chế Hoạt động Bình thường (Normal Operation)
 - **Truy cập người dùng:** Route 53 định tuyến traffic qua bản ghi Failover **PRIMARY** trỏ về Application Load Balancer (ALB) tại Sydney.
@@ -48,7 +48,8 @@ Sự cố tại Sydney (Tất cả 3 dịch vụ mất kết nối)
 
 ```text
 NT533/
-├── image.jpg                          # Sơ đồ kiến trúc hệ thống DR
+├── NT533.jpg                          # Sơ đồ kiến trúc hệ thống DR
+├── NT533.drawio                       # File thiết kế sơ đồ kiến trúc (Draw.io)
 ├── app/demo/                          # Ứng dụng demo microservices (Python)
 │   ├── app.py                         # HTTP server: probe /health TCP tới RDS, endpoints service
 │   ├── Dockerfile                     # Docker image đóng gói ứng dụng
