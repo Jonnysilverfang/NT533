@@ -1,0 +1,79 @@
+\section{Kết quả đạt được}
+
+Đồ án đã xây dựng được chuỗi kỹ thuật cốt lõi của chiến lược Backup and Restore: hạ tầng Primary tại Sydney, sao chép artifact sang Singapore, control plane DR, runtime stack theo nhu cầu, RDS restore, cập nhật secret, scale ECS và health gate trước khi cho phép cutover.
+
+Lần thực nghiệm ngày 30/09/2026 cho thấy workflow có thể tạo hoàn chỉnh runtime tại Singapore, khôi phục RDS và đưa ba target group về trạng thái healthy. Application health đạt sau khoảng 19 phút 15 giây; bước cuối ngay trước trạng thái thành công hoàn tất sau khoảng 19 phút 17 giây. Kịch bản được thực hiện ở chế độ an toàn nên Route~53 không bị thay đổi.
+
+\begin{table}[H]
+\centering
+\caption{Đối chiếu mục tiêu và kết quả đạt được}
+\label{tab:objectives}
+\begin{tabularx}{\textwidth}{@{}p{4.2cm}p{3cm}X@{}}
+\toprule
+\textbf{Mục tiêu} & \textbf{Kết quả} & \textbf{Nhận xét} \\
+\midrule
+IaC đa vùng & Hoàn thành & Nested CloudFormation cho Primary, DR và automation \\
+Backup/copy RDS & Hoàn thành & Recovery point Singapore được restore thành công \\
+Replicate image/secret & Hoàn thành & Artifact cần thiết có mặt tại DR Region \\
+Tự động dựng DR runtime & Hoàn thành & Runtime stack đạt \texttt{CREATE\_COMPLETE} \\
+Khởi chạy ứng dụng DR & Hoàn thành & Ba ECS service được scale và ALB health gate thành công \\
+Kiểm tra dữ liệu record & Chưa kết luận & Không còn output đối chiếu record của lần chạy \\
+DNS cutover & Không thuộc safe test & Workflow chủ động bỏ qua Route~53 \\
+Cleanup & Hoàn thành & RDS restore và runtime stack đã được xóa sau test \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Đánh giá kiến trúc}
+
+Ưu điểm chính của hệ thống là mức độ tự động hóa cao trong khi chi phí standby được giữ thấp. Singapore lưu trữ backup, image, secret và control plane nhưng không duy trì RDS, ALB, NAT Gateway hoặc ECS task của workload DR trong trạng thái bình thường. Khi được kích hoạt, workflow tạo đúng các tài nguyên cần thiết theo thứ tự phụ thuộc.
+
+Việc sử dụng CloudFormation giúp hạ tầng có thể tái tạo và review. DynamoDB lock ngăn nhiều execution cùng sửa một tập tài nguyên. Workflow kiểm tra Primary trước và sau khi dựng DR, chỉ scale ECS sau khi RDS available, đồng thời yêu cầu cả ba target group healthy trước nhánh DNS. Chế độ safe test cho phép diễn tập phần lớn quy trình mà không tác động traffic production.
+
+Về bảo mật, ECS task nằm trong private subnet và không được cấp public IP; RDS không public; kết nối database được quản lý bằng Secrets Manager; dữ liệu, backup và artifact được mã hóa bằng KMS. IAM role được tách theo chức năng của Step Functions, Lambda, CloudFormation và AWS Backup.
+
+\section{Hạn chế}
+
+\subsection{Khả năng sẵn sàng trong từng Region}
+
+Primary và DR runtime sử dụng một NAT Gateway; RDS mặc định Single-AZ. Thiết kế này phù hợp mục tiêu tối ưu chi phí của đồ án nhưng chưa cung cấp HA đầy đủ trước sự cố ở phạm vi Availability Zone. Môi trường production quan trọng nên cân nhắc NAT Gateway theo AZ và RDS Multi-AZ.
+
+\subsection{DNS cutover}
+
+Workflow có khả năng tạo record Route~53 SECONDARY, nhưng input EventBridge và kịch bản test đều mặc định bỏ qua thao tác này. Hiện tại hệ thống phù hợp với mô hình tự động phục hồi hạ tầng, sau đó người vận hành quyết định cutover. Nếu bật chuyển DNS tự động, cần bổ sung bước phê duyệt hoặc policy rõ ràng, theo dõi \texttt{INSYNC} và probe bên ngoài AWS.
+
+\subsection{Failback và dữ liệu}
+
+Đồ án chưa có workflow failback từ Singapore về Sydney. Nếu ứng dụng nhận dữ liệu mới sau cutover, việc quay lại Primary cần quy trình backup hoặc replication ngược, kiểm tra consistency và kiểm soát thời điểm dừng ghi. Cleanup đơn thuần không thể thay thế failback.
+
+Output của bước đối chiếu record trong kịch bản cũ không còn được lưu, nên kết quả hiện tại không dùng để khẳng định dữ liệu ứng dụng đầu cuối đã được xác minh. Lần thử tiếp theo cần lưu ID record trước backup và kết quả truy vấn sau restore.
+
+\subsection{Idempotency và vận hành}
+
+DynamoDB lock giảm nguy cơ chạy đồng thời, nhưng restore token được sinh ngẫu nhiên cho mỗi lần gọi Lambda. Một retry xảy ra sau khi AWS Backup đã nhận request nhưng trước khi Lambda nhận response có thể tạo cửa sổ không nhất quán. Token nên được tạo xác định từ execution ID và recovery point.
+
+Workflow giữ lại tài nguyên khi thất bại để phục vụ điều tra. Cách làm này an toàn cho dữ liệu nhưng có thể phát sinh chi phí nếu không có cảnh báo và cleanup kịp thời. Cần alarm cho execution thất bại, lock tồn tại quá lâu và runtime hoạt động vượt thời gian cho phép.
+
+\subsection{Ứng dụng demo}
+
+Ba service dùng chung code, image và PostgreSQL; auth và order chưa có nghiệp vụ độc lập. Ứng dụng chưa có authentication, WAF, rate limiting hoặc distributed tracing. Response HTTP 500 còn trả chi tiết exception database. Các điểm này không cản trở mục tiêu kiểm thử DR nhưng cần được hardening trước khi áp dụng cho production.
+
+\section{Hướng phát triển}
+
+\begin{enumerate}
+  \item Tự động lưu execution history, stack events, restore job và probe log vào S3 theo execution ID.
+  \item Thực hiện nhiều DR run trong cùng điều kiện để đánh giá độ ổn định của timeline.
+  \item Xây dựng quy trình failback và kiểm tra dữ liệu hai chiều.
+  \item Bổ sung manual approval hoặc policy tự động trước Route~53 cutover.
+  \item Tăng HA trong Region bằng RDS Multi-AZ và kiến trúc NAT theo AZ khi yêu cầu độ tin cậy cao hơn.
+  \item Hardening ứng dụng: lỗi trả về an toàn, authentication, WAF, TLS và tracing.
+  \item Đánh giá Pilot Light hoặc Warm Standby nếu yêu cầu thời gian phục hồi thấp hơn mức Backup and Restore hiện tại.
+\end{enumerate}
+
+Mỗi hướng tối ưu đều làm thay đổi chi phí và độ phức tạp vận hành. Vì vậy, kiến trúc tương lai cần được lựa chọn dựa trên mức độ quan trọng của workload thay vì chỉ tối thiểu hóa một chỉ số kỹ thuật.
+
+\section{Kết luận}
+
+Đồ án đã xây dựng và kiểm thử được hệ thống Disaster Recovery đa vùng trên AWS theo chiến lược Backup and Restore. Workload chính chạy tại Sydney; Singapore lưu các artifact phục hồi và chỉ tạo runtime khi workflow được kích hoạt. Step Functions tự động phối hợp CloudFormation, AWS Backup, RDS, Secrets Manager, ECS và ALB để đưa ứng dụng dự phòng về trạng thái healthy.
+
+Kết quả thực nghiệm ghi nhận application health sau khoảng 19 phút 15 giây và đường workflow hoàn tất sau khoảng 19 phút 17 giây trong chế độ safe test. Mô hình cho thấy khả năng giảm đáng kể chi phí standby so với việc chạy hai Region đầy đủ, với đánh đổi là thời gian tạo hạ tầng và restore database. Đây là nền tảng phù hợp để tiếp tục phát triển failback, HA trong Region và hệ thống đo lường tự động cho các lần diễn tập tiếp theo.

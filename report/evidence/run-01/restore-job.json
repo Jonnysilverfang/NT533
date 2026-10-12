@@ -1,0 +1,15 @@
+{
+  "source": "AWS Backup DescribeRestoreJob",
+  "accountId": "[REDACTED_ACCOUNT_ID]",
+  "restoreJobId": "1816ab82-edd5-4fcd-ad0e-013f29ece4bf",
+  "recoveryPointArn": "[REDACTED_ARN]:snapshot:awsbackup:[REDACTED_COPY_JOB_ID]",
+  "sourceResourceArn": "[REDACTED_ARN]:db:prod-dr-primary-db",
+  "backupVaultArn": "[REDACTED_ARN]:backup-vault:prod-dr-backup-vault",
+  "creationDate": "2026-09-30T14:58:51.187Z",
+  "completionDate": "2026-09-30T15:07:18.723Z",
+  "status": "COMPLETED",
+  "percentDone": "100.00%",
+  "createdResourceArn": "[REDACTED_ARN]:db:prod-dr-restored-db",
+  "resourceType": "RDS",
+  "recoveryPointCreationDate": "2026-09-30T14:09:24.102Z"
+}

@@ -1,0 +1,12 @@
+{
+  "source": [
+    "AWS Backup DescribeRestoreJob",
+    "Amazon CloudWatch Logs /aws/rds/instance/prod-dr-restored-db/postgresql",
+    "AWS Lambda update-secret invocation log"
+  ],
+  "dbInstanceIdentifier": "prod-dr-restored-db",
+  "postgresReadyToAcceptConnections": "2026-09-30T15:01:35Z",
+  "restoreJobCompleted": "2026-09-30T15:07:18.723Z",
+  "rdsAvailableObservedByWorkflow": "2026-09-30T15:07:53.939Z",
+  "observationNote": "The update-secret Lambda requires DescribeDBInstances to return exactly one instance with status available before it updates the runtime secret."
+}

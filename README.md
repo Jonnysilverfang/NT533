@@ -103,6 +103,11 @@ NT533/
 │       ├── publish-images.ps1         # Build và push Docker images lên ECR Sydney
 │       ├── invoke-dr-test.ps1         # Kích hoạt diễn tập DR an toàn
 │       └── cleanup-dr-test.ps1        # Dọn dẹp tài nguyên DR an toàn sau diễn tập
+├── report/                             # Báo cáo LaTeX, PDF và evidence thực nghiệm
+│   ├── main-evidence.pdf               # Bản PDF mới nhất đã nhúng số liệu AWS
+│   ├── chapters/                       # Nội dung năm chương
+│   ├── appendix/                       # Phụ lục kỹ thuật và bảng evidence
+│   └── evidence/run-01/                # JSON/CSV gốc của lần DR ngày 30/09/2026
 └── README.md
 ```
 
@@ -356,9 +361,9 @@ Chỉ thực hiện trong khung giờ bảo trì được phê duyệt:
 
 ## 6. Real Data Disaster Recovery Demo
 
-Quy trình diễn tập phục hồi thảm họa với **dữ liệu PostgreSQL thực tế**, chứng minh tính toàn vẹn dữ liệu từ Sydney (`ap-southeast-2`) sang Singapore (`ap-southeast-1`) mà **không sử dụng Route 53 DNS cutover** (truy cập và kiểm thử trực tiếp thông qua DNS của Application Load Balancer).
+Quy trình dưới đây hỗ trợ kiểm tra phục hồi dữ liệu PostgreSQL từ Sydney (`ap-southeast-2`) sang Singapore (`ap-southeast-1`) mà không cần Route 53 DNS cutover. Một lần chạy chỉ được kết luận phục hồi dữ liệu thành công khi output đối chiếu record tại DR được lưu lại.
 
-Demo chứng minh đầy đủ chu trình:
+Luồng kiểm tra mục tiêu:
 `Data Sydney -> AWS Backup -> Restore Singapore -> ECS Singapore -> Đọc lại đúng data cũ`
 
 ```text
@@ -579,47 +584,55 @@ curl http://$drAlb/products
 curl http://$drAlb/products/1
 ```
 
-5. **Kết quả đạt tiêu chuẩn (PASS):**
+5. **Điều kiện kết luận PASS:**
 ```text
-================================
-REAL DATA DR TEST
-================================
-
-Primary Region: ap-southeast-2
-DR Region:      ap-southeast-1
-
-Primary record:
-BEFORE-DR-TEST-001
-
-Recovery Point:
-arn:aws:backup:ap-southeast-1:411509276671:recovery-point:819f727c-...
-
-Recovery Point Time:
-2026-09-30T13:35:12.000Z
-
-Restored RDS:
-prod-dr-restored-db
-
-DR RDS Endpoint:
-prod-dr-restored-db.cb8x...ap-southeast-1.rds.amazonaws.com:5432
-
-DR ALB:
-prod-dr-dr-alb-1234567890.ap-southeast-1.elb.amazonaws.com
-
-Database health:
-PASS
-
-Recovered record:
-BEFORE-DR-TEST-001
-
-RESULT:
-DR DATA RECOVERY PASS
-================================
+Primary record ID/name == recovered DR record ID/name
+RecoveryPointCreationDate > TestRecordCreationTime
+DR /health == HTTP 200 và database == connected
+Output kiểm tra được lưu cùng execution ID
 ```
+
+Lần execution được dùng trong báo cáo không còn output đối chiếu record của script. Vì vậy repository không gắn nhãn `DR DATA RECOVERY PASS` cho lần chạy này; kết quả xác minh được giới hạn ở runtime, RDS restore và application health.
 
 ---
 
-## 7. Đo lường RTO / RPO Thực tế
+## 7. Kết quả thực nghiệm đã truy vết
+
+Execution `real-data-dr-20260930-214735` ngày 30/09/2026 được dựng lại từ CloudTrail, CloudFormation stack events, AWS Backup, ECS và CloudWatch Logs. Không chạy thêm DR mới trong quá trình lập báo cáo.
+
+| Mốc | Timestamp UTC | Elapsed từ workflow start |
+|---|---:|---:|
+| `StartExecution` | 14:49:42.000 | 0 giây |
+| CloudFormation `CREATE_COMPLETE` | 14:58:46.717 | 9 phút 4,717 giây |
+| AWS Backup restore bắt đầu | 14:58:51.187 | 9 phút 9,187 giây |
+| AWS Backup restore `COMPLETED` | 15:07:18.723 | 17 phút 36,723 giây |
+| RDS `available` được workflow quan sát | 15:07:53.939 | 18 phút 11,939 giây |
+| ECS bắt đầu scale | 15:07:55.000 | 18 phút 13 giây |
+| Ba ALB target group healthy | 15:08:56.762 | **19 phút 14,762 giây** |
+| Release lock hoàn tất | 15:08:59.230 | 19 phút 17,230 giây |
+
+| Giai đoạn | Thời lượng |
+|---|---:|
+| Tạo DR runtime stack | 7 phút 30,979 giây |
+| AWS Backup restore RDS | 8 phút 27,536 giây |
+| Restore hoàn tất đến ALB healthy | 1 phút 38,039 giây |
+| Workflow start đến ALB healthy | **19 phút 14,762 giây** |
+
+Kết quả xác minh: workflow khởi tạo thành công, DR runtime đạt `CREATE_COMPLETE`, restore job đạt `COMPLETED`, RDS được quan sát ở trạng thái `available`, ba ECS service được scale lên desired count 1 và ba target group vượt health gate. Safe test không chuyển Route 53. Timestamp `ExecutionSucceeded` không còn truy xuất được vì state machine đã bị xóa; mốc release lock là bước cuối cùng quan sát được, không phải timestamp được suy đoán thay thế.
+
+Dữ liệu gốc:
+
+- [`report/evidence/run-01/timeline.csv`](./report/evidence/run-01/timeline.csv)
+- [`report/evidence/run-01/timeline.json`](./report/evidence/run-01/timeline.json)
+- [`report/evidence/run-01/result.md`](./report/evidence/run-01/result.md)
+- [`report/evidence/run-01/`](./report/evidence/run-01/)
+- Báo cáo PDF: [`report/main-evidence.pdf`](./report/main-evidence.pdf)
+
+Các file JSON giữ nguyên timestamp, trạng thái và resource name cần thiết để truy vết; Account ID và ARN đầy đủ được thay bằng placeholder trước khi commit.
+
+---
+
+## 8. Đo lường RTO / RPO Thực tế
 
 Trong báo cáo kỹ thuật, các mốc thời gian phải được trích xuất chính xác từ lịch sử thực thi của Step Functions và AWS Backup:
 - **T0 — Thời điểm bắt đầu sự cố:** Timestamp sự kiện `ExecutionStarted` của Step Functions.
@@ -633,7 +646,7 @@ $$\text{RPO Thực tế} = T_0 - \text{CreationDate của Recovery Point đượ
 
 ---
 
-## 7. Quy trình Dọn dẹp An toàn Sau Diễn tập (Cleanup)
+## 9. Quy trình Dọn dẹp An toàn Sau Diễn tập (Cleanup)
 
 Sau khi hoàn tất diễn tập DR, sử dụng script [cleanup-dr-test.ps1](file:///e:/repo/nt533/NT533/cloudformation/scripts/cleanup-dr-test.ps1) để thu hồi tài nguyên, tránh phát sinh chi phí ngoài dự kiến:
 
@@ -653,7 +666,7 @@ Sau khi hoàn tất diễn tập DR, sử dụng script [cleanup-dr-test.ps1](fi
 
 ---
 
-## 8. Hướng dẫn Xử lý Sự cố (Troubleshooting Guide)
+## 10. Hướng dẫn Xử lý Sự cố (Troubleshooting Guide)
 
 | Tình huống sự cố | Nguyên nhân khả dĩ | Hướng khắc phục |
 | :--- | :--- | :--- |

@@ -1,0 +1,15 @@
+{
+  "source": "AWS CloudTrail LookupEvents",
+  "eventId": "8dd75471-cacf-490e-97f0-37fa520c5372",
+  "eventName": "StartExecution",
+  "eventTime": "2026-09-30T14:49:42Z",
+  "region": "ap-southeast-1",
+  "stateMachineArn": "[REDACTED_ARN]:stateMachine:prod-dr-orchestrator",
+  "executionName": "real-data-dr-20260930-214735",
+  "executionArn": "[REDACTED_ARN]:execution:prod-dr-orchestrator:real-data-dr-20260930-214735",
+  "input": "HIDDEN_DUE_TO_SECURITY_REASONS",
+  "describeExecution": {
+    "status": "UNAVAILABLE",
+    "reason": "The state machine was deleted on 2026-09-30; AWS Step Functions now returns ExecutionDoesNotExist."
+  }
+}

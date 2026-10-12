@@ -1,0 +1,87 @@
+\section{Business Continuity và Disaster Recovery}
+
+Business Continuity là khả năng duy trì hoặc khôi phục các chức năng kinh doanh quan trọng khi xảy ra gián đoạn. Disaster Recovery là tập con tập trung vào việc khôi phục hệ thống công nghệ, dữ liệu và kết nối phục vụ các chức năng đó. Một kiến trúc DR hoàn chỉnh cần trả lời ba câu hỏi: dữ liệu nào cần bảo vệ, dịch vụ cần trở lại trong bao lâu và tổ chức chấp nhận mất bao nhiêu dữ liệu.
+
+\subsection{RTO và RPO}
+
+Recovery Time Objective (RTO) là khoảng thời gian mục tiêu để dịch vụ được khôi phục sau sự cố. Recovery Point Objective (RPO) biểu thị lượng dữ liệu mà hệ thống có thể chấp nhận mất, tính theo thời gian giữa sự cố và recovery point gần nhất \cite{aws-dr-objectives}. Với chiến lược Backup and Restore, thời gian phục hồi thường cao hơn các mô hình standby vì hạ tầng và database phải được tạo lại. Chu kỳ backup cũng ảnh hưởng trực tiếp đến lượng dữ liệu có khả năng mất khi xảy ra sự cố.
+
+\section{Các chiến lược DR trên AWS}
+
+AWS mô tả bốn nhóm chiến lược phổ biến theo mức chi phí và tốc độ phục hồi: Backup and Restore, Pilot Light, Warm Standby và Multi-site Active/Active \cite{aws-dr-options}. Bảng~\ref{tab:dr-strategies} trình bày so sánh định tính; các giá trị không phải số đo của NT533.
+
+\begin{table}[H]
+\centering
+\caption{So sánh định tính các chiến lược Disaster Recovery}
+\label{tab:dr-strategies}
+\begin{tabularx}{\textwidth}{@{}p{2.7cm}p{2.6cm}p{2.5cm}X X@{}}
+\toprule
+\textbf{Chiến lược} & \textbf{Chi phí chờ} & \textbf{RTO/RPO tương đối} & \textbf{Khi nên dùng} & \textbf{Giới hạn chính} \\
+\midrule
+Backup and Restore & Thấp nhất & RTO cao; RPO phụ thuộc backup & Workload chịu được thời gian dựng lại, ngân sách hạn chế & Phải restore dữ liệu và tạo compute trước khi phục vụ \\
+Pilot Light & Thấp đến trung bình & Tốt hơn Backup and Restore & Cần giữ lõi dữ liệu hoặc dịch vụ quan trọng luôn hoạt động & Vẫn phải scale và kiểm tra phần còn lại \\
+Warm Standby & Trung bình đến cao & RTO thấp hơn & Dịch vụ quan trọng, chấp nhận chạy bản thu nhỏ ở DR & Chi phí compute, database và vận hành thường trực \\
+Active/Active & Cao nhất & RTO/RPO thấp nhất về mặt thiết kế & Workload toàn cầu hoặc yêu cầu liên tục rất cao & Đồng bộ dữ liệu, consistency, routing và vận hành phức tạp \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+NT533 gần với Backup and Restore có control plane luôn sẵn sàng. Singapore giữ backup, image, secret replica và automation, nhưng VPC runtime, NAT Gateway, ALB, ECS service và RDS phục hồi chỉ xuất hiện khi chạy DR. Cách làm này không phải Warm Standby vì không có một bản ứng dụng thu nhỏ liên tục phục vụ tại Region thứ hai.
+
+\section{Nền tảng mạng và compute}
+
+\subsection{Amazon VPC}
+
+Amazon VPC cung cấp miền mạng logic cô lập trong một Region. Thiết kế của đề tài dùng hai Availability Zone, với ba lớp subnet: public subnet cho ALB và NAT Gateway; private application subnet cho ECS task; isolated database subnet cho RDS. Route table của database không có default route ra Internet. Security Group tạo chuỗi tin cậy ALB đến ECS trên cổng 8080, ECS đến RDS trên cổng 5432; database không nhận lưu lượng trực tiếp từ Internet.
+
+Một NAT Gateway duy nhất được dùng trong mỗi runtime VPC. Đây là lựa chọn giảm chi phí nhưng tạo phụ thuộc vào một Availability Zone đối với lưu lượng outbound của ECS. Trong môi trường production yêu cầu HA cao, NAT Gateway theo từng AZ và route table riêng thường phù hợp hơn; đổi lại chi phí cố định tăng.
+
+\subsection{Amazon ECS Fargate}
+
+Amazon ECS quản lý vòng đời container; Fargate cung cấp compute không yêu cầu quản lý EC2 worker node \cite{aws-ecs-fargate}. Task sử dụng network mode \texttt{awsvpc}, vì vậy mỗi task có elastic network interface và được kiểm soát trực tiếp bởi Security Group. Trong đề tài, mỗi service liên kết với target group riêng, cho phép ALB định tuyến theo path và CloudWatch giám sát số target khỏe mạnh của từng dịch vụ.
+
+ECS deployment circuit breaker được bật để rollback deployment không đạt steady state. Cơ chế này bảo vệ quá trình thay task, nhưng không thay thế workflow DR: database vẫn phải được restore, runtime secret phải được cập nhật và desired count phải được tăng từ 0 lên 1.
+
+\section{Container artifact và cơ sở dữ liệu}
+
+\subsection{Amazon ECR và replication}
+
+Amazon ECR lưu image container. Cross-Region replication sao chép image sang registry đích theo rule cấu hình \cite{aws-ecr-replication}. Repository của NT533 bật immutable tag, scan on push và lifecycle policy. Tính bất biến giúp cùng một tag không bị ghi đè sau khi deployment đã tham chiếu; tuy nhiên quy trình hiện dùng tag mặc định \texttt{v1}, nên lần publish tiếp theo phải đổi tag thay vì push lại cùng tag.
+
+\subsection{Amazon RDS for PostgreSQL}
+
+Amazon RDS quản lý database engine, backup, patching và các thao tác vận hành phổ biến. Primary database dùng PostgreSQL 16, storage gp3 mã hóa bằng customer-managed KMS key, private DB subnet, TLS bắt buộc và CloudWatch log export. RDS native automated backup vẫn được giữ bảy ngày, đồng thời AWS Backup tạo recovery point riêng phục vụ copy liên vùng. AWS nêu rõ việc backup và restore có đặc điểm, thời gian và giới hạn phụ thuộc loại tài nguyên, kích thước dữ liệu và trạng thái dịch vụ \cite{aws-rds-backup-restore}.
+
+\section{Sao lưu, secret và khôi phục liên vùng}
+
+\subsection{AWS Backup}
+
+AWS Backup cung cấp backup plan, vault, lifecycle và cross-Region copy tập trung \cite{aws-backup-cross-region}. Trong NT533, plan chọn đúng ARN của RDS Primary, chạy theo cron sáu giờ, ghi recovery point vào vault Sydney và copy sang vault Singapore. Hai vault được mã hóa bằng KMS key theo Region. Việc chỉ định recovery point theo ARN nguồn trong Lambda giảm nguy cơ restore nhầm database khác cùng vault.
+
+\subsection{AWS Secrets Manager}
+
+Credentials của Primary được tạo tự động, không lưu trong template. Secret được replicate sang Singapore \cite{aws-secrets-replication}. Sau khi restore, endpoint RDS thay đổi nên không thể dùng nguyên secret nguồn làm cấu hình runtime. Lambda \texttt{update-secret} đọc username/password từ replica, lấy endpoint/port từ RDS mới và ghi một runtime secret dành riêng cho ECS DR.
+
+\section{Định tuyến và phát hiện sự cố}
+
+Amazon Route~53 hỗ trợ failover routing với record PRIMARY và SECONDARY \cite{aws-route53-failover}. NT533 tạo record PRIMARY trong stack Sydney. Record SECONDARY chưa tồn tại thường trực; Step Functions có thể UPSERT record này sau khi database, ECS và ALB vượt qua health gate. Tuy nhiên input hiện tại của EventBridge đặt \texttt{skip\_route53\_switch=true}; vì vậy đường tự động do alarm chỉ chuẩn bị DR, không tự cutover DNS. Đây là một chốt an toàn quan trọng và khác với mô tả ``tự động chuyển DNS'' nếu chỉ đọc sơ đồ tổng quát.
+
+CloudWatch giám sát \texttt{HealthyHostCount} của ba target group. Mỗi alarm dùng period 60 giây, năm evaluation period, ngưỡng ba datapoint dưới 1; thuộc tính \texttt{TreatMissingData} nhận giá trị \texttt{breaching}. Composite alarm chuyển sang ALARM khi bất kỳ service nào không có target khỏe mạnh. EventBridge chuyển đúng sự kiện alarm này từ Sydney sang custom event bus ở Singapore; dead-letter queue lưu sự kiện không chuyển được.
+
+\section{Điều phối và tính nhất quán vận hành}
+
+AWS Step Functions biểu diễn quy trình nhiều bước dưới dạng state machine, hỗ trợ Choice, Wait, Parallel, retry, catch và tích hợp trực tiếp với dịch vụ AWS \cite{aws-step-functions}. NT533 sử dụng Standard Workflow vì thời gian restore có thể kéo dài và cần lịch sử thực thi. Workflow có timeout 12 giờ, ghi toàn bộ execution data vào CloudWatch Logs và bật tracing.
+
+Lambda được dùng cho logic nhỏ mà tích hợp trực tiếp không xử lý thuận tiện: xác minh alarm, chọn recovery point, chuẩn hóa metadata restore, ghép runtime secret, đếm target khỏe mạnh, parse stack output và quản lý lock. DynamoDB conditional write tạo singleton lock. TTL hỗ trợ dọn lock hết hạn, nhưng TTL không xóa tức thời; điều kiện \texttt{expires\_at < now} mới là cơ chế cho phép execution mới chiếm lock đã hết hạn.
+
+Idempotency là yêu cầu quan trọng vì EventBridge và các API phân tán có thể retry. Workflow giảm rủi ro bằng lock, kiểm tra RDS đã tồn tại và dùng tên stack cố định. Tuy vậy, \texttt{start-restore} sinh idempotency token ngẫu nhiên cho mỗi lần gọi; nếu lời gọi đầu đã được AWS Backup nhận nhưng phản hồi bị mất trước khi Lambda trả kết quả, retry có thể gặp cửa sổ chạy trùng. Đây là giới hạn cần cải thiện bằng token xác định theo execution hoặc recovery point.
+
+\section{Infrastructure as Code}
+
+AWS CloudFormation quản lý tài nguyên dưới dạng stack khai báo \cite{aws-cloudformation}. Repository dùng nested stack để tách network, security, ALB, ECS, RDS, ECR, backup, DNS và monitoring. Cấu trúc này giúp review theo miền trách nhiệm, nhưng yêu cầu package template lên S3 trước khi deploy. Script package dùng release path bất biến và từ chối ghi đè object DR đã tồn tại, hỗ trợ truy vết artifact hạ tầng được workflow sử dụng.
+
+\section{Health check, retry và eventual consistency}
+
+Health check xuất hiện ở ba lớp: container gọi \texttt{/health}; target group kiểm tra cùng endpoint; Lambda kiểm tra số target \texttt{healthy}. Endpoint \texttt{/health} thực hiện \texttt{SELECT 1} trên database, do đó target chỉ được xem là khỏe khi cả ứng dụng và RDS kết nối thành công. Đây là health gate có giá trị cho DR nhưng cũng làm cả auth và order phụ thuộc database trong ứng dụng demo.
+
+Retry chỉ nên áp dụng với lỗi tạm thời. Workflow retry throttling và service exception, còn lỗi logic đi vào nhánh thất bại. Các vòng Wait/Describe xử lý eventual consistency của CloudFormation, Backup, RDS và ALB. Khi thất bại, workflow gửi SNS và giải phóng lock; nó không tự xóa stack hoặc database đã tạo. Cleanup là một quy trình riêng, có xác nhận phá hủy và kiểm tra record DNS trước khi xóa.

@@ -1,0 +1,57 @@
+\section{Bối cảnh và động lực}
+
+Điện toán đám mây giúp tổ chức triển khai ứng dụng nhanh, mở rộng theo nhu cầu và giảm chi phí đầu tư hạ tầng ban đầu. Tuy nhiên, việc đưa workload lên cloud không tự động loại bỏ rủi ro gián đoạn. Lỗi phần mềm, sai cấu hình, mất dữ liệu, sự cố mạng hoặc sự cố ở phạm vi Availability Zone và Region vẫn có thể làm dịch vụ ngừng hoạt động. AWS Well-Architected Reliability Pillar xem khôi phục sau thảm họa là một phần của thiết kế độ tin cậy và yêu cầu quy trình phục hồi phải được chuẩn bị, kiểm thử định kỳ \cite{aws-dr-objectives}.
+
+Đối với hệ thống quy mô vừa và nhỏ, duy trì đầy đủ ứng dụng và cơ sở dữ liệu tại hai Region tạo ra chi phí thường trực đáng kể. Ngược lại, phương án chỉ lưu bản sao dữ liệu giúp giảm chi phí chờ nhưng cần nhiều thời gian hơn để dựng lại hạ tầng khi có sự cố. Đồ án tập trung giải quyết điểm đánh đổi này bằng chiến lược Backup and Restore: các artifact cần thiết được chuẩn bị tại Region dự phòng, còn compute và database chỉ được khởi tạo khi quy trình DR bắt đầu.
+
+\section{Bài toán của đề tài}
+
+Hệ thống được triển khai với workload chính tại Sydney và Region dự phòng tại Singapore. Khi Primary Region không còn đáp ứng, quy trình phục hồi cần thực hiện đồng bộ nhiều công việc:
+
+\begin{enumerate}
+  \item lựa chọn recovery point PostgreSQL đã được sao chép sang Singapore;
+  \item tạo mạng, load balancer và ECS runtime tại Region dự phòng;
+  \item khôi phục RDS, cập nhật thông tin kết nối và khởi chạy ứng dụng;
+  \item kiểm tra sức khỏe của toàn bộ target group trước khi cho phép chuyển lưu lượng;
+  \item ngăn nhiều quy trình DR chạy đồng thời và hỗ trợ cleanup an toàn sau kiểm thử.
+\end{enumerate}
+
+Một bản backup riêng lẻ chưa đủ tạo thành dịch vụ có thể tiếp nhận request. Quá trình phục hồi còn phụ thuộc vào network, IAM, container image, secret, database endpoint, health check và thứ tự khởi tạo tài nguyên. Vì vậy, hệ thống được thiết kế như một workflow có trạng thái thay vì một tập hợp lệnh vận hành rời rạc.
+
+\section{Mục tiêu}
+
+Mục tiêu tổng quát của đồ án là xây dựng hệ thống Disaster Recovery đa vùng trên AWS theo chiến lược Backup and Restore, có khả năng tái tạo workload tại Singapore từ các artifact đã chuẩn bị trước. Các mục tiêu cụ thể gồm:
+
+\begin{itemize}
+  \item mô tả hạ tầng bằng AWS CloudFormation để có thể triển khai lặp lại;
+  \item container hóa ứng dụng và vận hành trên Amazon ECS Fargate;
+  \item lưu dữ liệu trên Amazon RDS for PostgreSQL và sao chép recovery point liên vùng bằng AWS Backup;
+  \item sao chép image ECR và thông tin xác thực cần thiết sang Region dự phòng;
+  \item điều phối quy trình phục hồi bằng AWS Step Functions với retry, timeout, lock và health gate;
+  \item cung cấp chế độ kiểm thử an toàn, không mặc định thay đổi DNS production;
+  \item thu thập các mốc thời gian thực tế để đánh giá quá trình phục hồi.
+\end{itemize}
+
+\section{Phạm vi}
+
+Đề tài tập trung vào việc xây dựng và tự động hóa quy trình khôi phục workload từ Primary Region sang DR Region. Phạm vi triển khai gồm hạ tầng mạng, Application Load Balancer, ba dịch vụ ECS Fargate, RDS PostgreSQL, backup liên vùng, container image, secret và hệ thống điều phối phục hồi.
+
+Primary Region đặt tại Sydney (\texttt{ap-southeast-2}); DR Region đặt tại Singapore (\texttt{ap-southeast-1}). Ứng dụng demo sử dụng chung một image cho ba service \texttt{auth}, \texttt{product} và \texttt{order}. Service product cung cấp các thao tác dữ liệu tối thiểu trên PostgreSQL; hai service còn lại hỗ trợ minh họa định tuyến và kiểm tra khả năng khởi chạy nhiều workload.
+
+Đồ án lựa chọn Backup and Restore thay vì Active/Active hoặc Warm Standby nhằm ưu tiên chi phí duy trì thấp. Các nội dung đánh giá tải lớn, failback tự động và kiến trúc ứng dụng production hoàn chỉnh được xem là hướng mở rộng sau khi quy trình DR cốt lõi đã hoạt động ổn định.
+
+\section{Phương pháp thực hiện}
+
+Nhóm triển khai hệ thống theo bốn bước. Trước hết, kiến trúc đa vùng được mô hình hóa bằng các nested stack CloudFormation. Tiếp theo, ứng dụng và các artifact được chuẩn bị tại Sydney và sao chép sang Singapore. Sau đó, Step Functions được xây dựng để điều phối toàn bộ quy trình tạo runtime, restore RDS, cập nhật secret, scale ECS và kiểm tra ALB. Cuối cùng, nhóm thực hiện một kịch bản DR an toàn và đối chiếu timestamp từ CloudTrail, CloudFormation, AWS Backup và CloudWatch Logs.
+
+Tài liệu chính thức AWS được sử dụng để lựa chọn chiến lược, giải thích hành vi dịch vụ và đối chiếu các thực hành về độ tin cậy \cite{aws-dr-options,aws-well-architected-reliability}. Các thông số kỹ thuật trong báo cáo bám theo cấu hình đã triển khai của đồ án.
+
+\section{Đóng góp của đồ án}
+
+Đồ án xây dựng được một quy trình DR hoàn chỉnh theo hướng Infrastructure as Code. Artifact hạ tầng được package lên S3, artifact ứng dụng được lưu trên ECR và artifact dữ liệu được bảo vệ bằng AWS Backup. Step Functions kết hợp các thành phần này thành một chuỗi phục hồi có kiểm soát; DynamoDB lock hạn chế chạy trùng; EventBridge, SNS và CloudWatch hỗ trợ kích hoạt, thông báo và quan sát.
+
+Kịch bản thực nghiệm đã tái tạo runtime tại Singapore, khôi phục RDS, tăng desired count cho ba ECS service và đưa các target group về trạng thái healthy mà không thay đổi Route~53. Dữ liệu lịch sử AWS cho phép dựng lại timeline từ lúc workflow bắt đầu đến khi health gate hoàn tất trong khoảng 19 phút 15 giây và bước cuối của workflow hoàn tất trong khoảng 19 phút 17 giây.
+
+\section{Cấu trúc báo cáo}
+
+Chương~2 trình bày cơ sở lý thuyết và các dịch vụ AWS liên quan. Chương~3 mô tả yêu cầu, kiến trúc Primary/DR, cơ chế backup và workflow tự động. Chương~4 trình bày quá trình triển khai, kịch bản kiểm thử và kết quả thời gian thực tế. Chương~5 đánh giá kết quả đạt được, hạn chế kỹ thuật và hướng phát triển. Các phụ lục cung cấp cấu hình, lệnh thực thi và timeline của lần DR đã truy vết.

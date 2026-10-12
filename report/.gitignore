@@ -1,0 +1,31 @@
+## LaTeX auxiliary files
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.lof
+*.lol
+*.log
+*.lot
+*.out
+*.run.xml
+*.synctex.gz
+*.toc
+*.xdv
+*-blx.bib
+
+## BibLaTeX / Biber
+*.bib.bak
+
+## Compiled output: chỉ lưu bản PDF evidence mới nhất.
+*.pdf
+!main-evidence.pdf
+
+## Editors
+.vscode/settings.json
+*.swp
+*~
+.DS_Store
+Thumbs.db

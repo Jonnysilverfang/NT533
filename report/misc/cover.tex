@@ -1,0 +1,41 @@
+% ==================== TRANG BÌA ====================
+\begin{titlepage}
+\thispagestyle{empty}
+% Khung viền tikz chuẩn UIT
+\begin{tikzpicture}[remember picture, overlay]
+  \draw[line width=1pt, color=blue!80!black]
+    ($(current page.north west) + (108pt,-65pt)$)
+    rectangle
+    ($(current page.south east) + (-56pt,56pt)$);
+\end{tikzpicture}
+
+\vspace*{0pt} % reset vertical position
+\begin{center}
+  {\large\bfseries ĐẠI HỌC QUỐC GIA THÀNH PHỐ HỒ CHÍ MINH}\\[3pt]
+  {\large\bfseries TRƯỜNG ĐẠI HỌC CÔNG NGHỆ THÔNG TIN}\\[3pt]
+  {\normalsize\bfseries KHOA MẠNG MÁY TÍNH VÀ TRUYỀN THÔNG}\\[24pt]
+
+  % Logo UIT
+  \includegraphics[height=2.2cm]{img/logo/logo_uit.png}\\[14pt]
+
+  {\large\bfseries BÁO CÁO ĐỒ ÁN CUỐI KỲ}\\[5pt]
+  {\normalsize\bfseries MÔN HỌC: NT533 -- [TÊN MÔN HỌC CHƯA CUNG CẤP]}\\[18pt]
+
+  {\normalsize\bfseries ĐỀ TÀI}\\[8pt]
+  {\large\bfseries XÂY DỰNG HỆ THỐNG DISASTER RECOVERY ĐA VÙNG\\TỐI ƯU CHI PHÍ TRÊN AMAZON WEB SERVICES}\\[12pt]
+  {\normalsize\bfseries DESIGN AND IMPLEMENTATION OF A COST-OPTIMIZED\\MULTI-REGION DISASTER RECOVERY SYSTEM ON AWS}\\[32pt]
+
+  % Thông tin GVHD và nhóm SV — dùng minipage căn giữa
+  \begin{minipage}{0.75\textwidth}
+    \raggedright
+    {\bfseries Lớp:}\enspace [MÃ LỚP HỌC PHẦN CHƯA CUNG CẤP]\\[10pt]
+    {\bfseries Giảng viên hướng dẫn:}\\[4pt]
+    \hspace{0.5cm}1.\enspace [GIẢNG VIÊN CHƯA CUNG CẤP]\\[10pt]
+    {\bfseries Nhóm sinh viên thực hiện:}\\[4pt]
+    \hspace{0.5cm}1.\enspace [HỌ TÊN SINH VIÊN CHƯA CUNG CẤP] \hfill [MSSV CHƯA CUNG CẤP]
+  \end{minipage}
+
+  \vfill
+  {\bfseries TP. Hồ Chí Minh, tháng 10 năm 2026}
+\end{center}
+\end{titlepage}

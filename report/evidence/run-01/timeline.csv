@@ -1,0 +1,10 @@
+event,timestamp_utc,elapsed_seconds,elapsed_minutes,source,resource_id
+ExecutionStarted,2026-09-30T14:49:42.000Z,0.000,0.000,CloudTrail StartExecution,real-data-dr-20260930-214735
+DrStackCreateStarted,2026-09-30T14:51:15.738Z,93.738,1.562,CloudFormation stack event,prod-dr-runtime-production
+DrStackCreateComplete,2026-09-30T14:58:46.717Z,544.717,9.079,CloudFormation stack event,prod-dr-runtime-production
+BackupRestoreStarted,2026-09-30T14:58:51.187Z,549.187,9.153,AWS Backup DescribeRestoreJob,1816ab82-edd5-4fcd-ad0e-013f29ece4bf
+BackupRestoreCompleted,2026-09-30T15:07:18.723Z,1056.723,17.612,AWS Backup DescribeRestoreJob,1816ab82-edd5-4fcd-ad0e-013f29ece4bf
+RdsAvailableObserved,2026-09-30T15:07:53.939Z,1091.939,18.199,CloudWatch Lambda log,prod-dr-production-dr-update-secret
+EcsScaleStarted,2026-09-30T15:07:55.000Z,1093.000,18.217,CloudTrail ECS UpdateService,prod-dr-dr-ecs
+AlbTargetsHealthyObserved,2026-09-30T15:08:56.762Z,1154.762,19.246,CloudWatch Lambda log,prod-dr-production-dr-check-alb
+WorkflowTerminalStepCompleted,2026-09-30T15:08:59.230Z,1157.230,19.287,CloudWatch Lambda log,prod-dr-production-dr-manage-lock

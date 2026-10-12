@@ -1,0 +1,44 @@
+\clearpage
+\chapter{CẤU HÌNH VÀ LỆNH TRIỂN KHAI TIÊU BIỂU}
+
+\section{Cấu hình backup}
+
+\begin{lstlisting}[language=yaml,caption={Quy tắc backup và copy liên vùng rút gọn}]
+BackupPlanRule:
+  - RuleName: six-hour-rds-copy-to-dr
+    TargetBackupVault: !Ref PrimaryVaultName
+    ScheduleExpression: !Ref BackupSchedule
+    StartWindowMinutes: 60
+    CompletionWindowMinutes: 360
+    Lifecycle:
+      DeleteAfterDays: !Ref RetentionDays
+    CopyActions:
+      - DestinationBackupVaultArn: !Ref DrVaultArn
+        Lifecycle:
+          DeleteAfterDays: !Ref RetentionDays
+\end{lstlisting}
+
+\section{Input diễn tập an toàn}
+
+\begin{lstlisting}[language=PowerShell,caption={Payload của safe DR test}]
+$payload = @{
+  trigger = 'manual-test'
+  simulate_failure = $true
+  test_mode = $true
+  skip_route53_switch = $true
+} | ConvertTo-Json -Compress
+\end{lstlisting}
+
+\section{Các lệnh chính}
+
+\begin{lstlisting}[language=PowerShell,caption={Trình tự công cụ theo repository}]
+.\cloudformation\scripts\validate.ps1
+.\cloudformation\scripts\package.ps1 -PrimaryArtifactBucket <...> `
+  -DrArtifactBucket <...> -ReleaseVersion v1.0.X
+.\cloudformation\scripts\deploy-primary.ps1
+.\cloudformation\scripts\publish-images.ps1 -AccountId <...> -ImageTag <...>
+.\cloudformation\scripts\deploy-automation.ps1
+.\cloudformation\scripts\test-real-data-dr.ps1
+\end{lstlisting}
+
+Các lệnh trên chỉ mô tả phương pháp. Báo cáo không chạy AWS deploy, DR test hoặc cleanup trong quá trình biên soạn.

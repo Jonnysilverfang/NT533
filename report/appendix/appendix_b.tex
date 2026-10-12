@@ -1,0 +1,57 @@
+\clearpage
+\chapter{QUY TRÌNH DR VÀ TIMELINE THỰC NGHIỆM}
+
+\section{Luồng automation chi tiết}
+
+\begin{longtable}{@{}p{1cm}p{4cm}p{8.5cm}@{}}
+\caption{Các nhóm trạng thái của Step Functions}\\
+\toprule
+\textbf{STT} & \textbf{Nhóm} & \textbf{Trạng thái/hoạt động chính}\\
+\midrule
+\endfirsthead
+\toprule
+\textbf{STT} & \textbf{Nhóm} & \textbf{Trạng thái/hoạt động chính}\\
+\midrule
+\endhead
+1 & Trigger/lock & ValidateTrigger, AcquireDrLock, LockAcquired\\
+2 & Xác nhận & NotifyFailureDetected, ConfirmationWindow, RecheckPrimary\\
+3 & Runtime stack & CreateDrStack, DescribeDrStack, ParseStackOutputs\\
+4 & Recovery point & FindLatestRecoveryPoint, StartRdsRestore\\
+5 & Database & DescribeRestoreJob, DescribeRestoredDatabase, DatabaseStatus\\
+6 & Cấu hình & UpdateRuntimeSecret\\
+7 & Compute & StartEcsServices chạy ba nhánh song song\\
+8 & Health gate & CheckAlbHealth, AlbHealthy, AlbTimedOut\\
+9 & Cutover & RecheckBeforeCutover, SkipDnsRequested, UpsertSecondaryRecord\\
+10 & Kết thúc & SNS notification, ReleaseLockSuccess/Failure, Succeed/Fail\\
+\bottomrule
+\end{longtable}
+
+\section{Timeline execution ngày 30/09/2026}
+
+Execution \path{real-data-dr-20260930-214735} được truy vết từ CloudTrail, CloudFormation, AWS Backup và CloudWatch Logs. Các timestamp sử dụng UTC.
+
+\begin{longtable}{@{}p{4.1cm}p{3.5cm}p{3cm}p{2.7cm}@{}}
+\caption{Các mốc thực nghiệm đã thu thập}\\
+\toprule
+\textbf{Sự kiện} & \textbf{Timestamp UTC} & \textbf{Thời gian từ start} & \textbf{Nguồn}\\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Sự kiện} & \textbf{Timestamp UTC} & \textbf{Thời gian từ start} & \textbf{Nguồn}\\
+\midrule
+\endhead
+Execution bắt đầu & 14:49:42.000 & 0 giây & CloudTrail\\
+DR stack bắt đầu & 14:51:15.738 & 1 phút 33,738 giây & CFN event\\
+DR stack hoàn tất & 14:58:46.717 & 9 phút 4,717 giây & CFN event\\
+Restore bắt đầu & 14:58:51.187 & 9 phút 9,187 giây & AWS Backup\\
+Restore hoàn tất & 15:07:18.723 & 17 phút 36,723 giây & AWS Backup\\
+RDS available được quan sát & 15:07:53.939 & 18 phút 11,939 giây & Lambda log\\
+ECS bắt đầu scale & 15:07:55.000 & 18 phút 13 giây & CloudTrail\\
+ALB health gate thành công & 15:08:56.762 & 19 phút 14,762 giây & Lambda log\\
+Release lock hoàn tất & 15:08:59.230 & 19 phút 17,230 giây & Lambda log\\
+\bottomrule
+\end{longtable}
+
+\section{Dữ liệu nên lưu cho các lần kiểm thử tiếp theo}
+
+Mỗi execution nên tự động lưu execution history, stack events, restore job, target health và kết quả probe vào S3 theo cùng execution ID. Nếu kiểm thử dữ liệu, file kết quả cần chứa ID record được ghi tại Primary và kết quả truy vấn tương ứng tại DR. Cách lưu này giúp nhóm tái dựng timeline mà không phụ thuộc vào thời gian retention của từng dịch vụ.

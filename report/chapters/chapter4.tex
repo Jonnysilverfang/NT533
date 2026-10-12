@@ -1,0 +1,210 @@
+\section{Môi trường triển khai}
+
+Primary Region của hệ thống đặt tại Sydney (\texttt{ap-southeast-2}); DR và automation đặt tại Singapore (\texttt{ap-southeast-1}). Hạ tầng được triển khai bằng AWS CloudFormation nested stack, AWS CLI và PowerShell. Ứng dụng chạy trên Python 3.12, được đóng gói thành container và lắng nghe tại cổng 8080.
+
+\begin{table}[H]
+\centering
+\caption{Cấu hình môi trường chính}
+\label{tab:environment}
+\begin{tabularx}{\textwidth}{@{}l l X@{}}
+\toprule
+\textbf{Hạng mục} & \textbf{Giá trị} & \textbf{Mô tả} \\
+\midrule
+Primary Region & \texttt{ap-southeast-2} & Sydney, chạy workload chính \\
+DR Region & \texttt{ap-southeast-1} & Singapore, lưu artifact và phục hồi theo nhu cầu \\
+Database & PostgreSQL 16, \texttt{db.t4g.micro} & RDS mã hóa, private subnet \\
+Container & Python 3.12, cổng 8080 & Ba ECS Fargate service \\
+ECS task size & 256 CPU, 512 MiB & Cấu hình cho ứng dụng demo \\
+Backup & Mỗi 6 giờ, giữ 7 ngày & Copy recovery point sang Singapore \\
+DR desired count & 1 mỗi service sau restore & Scale sau khi database sẵn sàng \\
+Workflow timeout & 43.200 giây & Giới hạn tối đa 12 giờ \\
+DNS test mode & Bỏ qua cutover & Không tác động traffic production \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Thông tin kết nối database được quản lý bằng AWS Secrets Manager. Các giá trị môi trường như ARN, hosted zone và email được truyền qua parameter; báo cáo không trình bày credential hoặc nội dung secret.
+
+\section{Quy trình triển khai}
+
+\subsection{Kiểm tra cú pháp}
+
+Trước khi deploy, nhóm chạy \texttt{validate.ps1} để kiểm tra toàn bộ template bằng \texttt{cfn-lint} tại cả hai Region, đồng thời compile bytecode cho Lambda và ứng dụng Python.
+
+\begin{lstlisting}[language=PowerShell,caption={Kiểm tra template và mã nguồn},label={lst:validate}]
+.\cloudformation\scripts\validate.ps1
+\end{lstlisting}
+
+\subsection{Bootstrap và đóng gói artifact}
+
+Regional baseline được triển khai tại Sydney và Singapore để tạo S3 artifact bucket, KMS key và AWS Backup vault. Ba ECR repository đích được chuẩn bị tại Singapore. Script \texttt{package.ps1} đóng gói các nested template; DR runtime template được lưu theo release version để workflow luôn tham chiếu một artifact hạ tầng xác định.
+
+\begin{lstlisting}[language=PowerShell,caption={Đóng gói nested template},label={lst:package}]
+.\cloudformation\scripts\package.ps1 `
+  -PrimaryArtifactBucket <PRIMARY_BUCKET> `
+  -DrArtifactBucket <DR_BUCKET> `
+  -ReleaseVersion v1.0.X
+\end{lstlisting}
+
+\subsection{Triển khai Primary và publish image}
+
+Primary stack tạo VPC, ALB, ECS, RDS, ECR, AWS Backup và monitoring tại Sydney. Các ECS service ban đầu có desired count bằng 0; sau khi image được build và push lên ECR, service được scale theo quy trình triển khai. Cross-Region replication chuyển image sang Singapore để DR runtime có thể pull image mà không phụ thuộc Primary Region.
+
+\begin{lstlisting}[language=PowerShell,caption={Publish image ứng dụng},label={lst:images}]
+.\cloudformation\scripts\publish-images.ps1 `
+  -AccountId <AWS_ACCOUNT_ID> `
+  -ImageTag v1 `
+  -RepositoryPrefix prod
+\end{lstlisting}
+
+ECR bật immutable tag, vì vậy mỗi bản phát hành cần sử dụng tag mới. Trước khi kiểm thử DR, nhóm cần xác nhận image đã xuất hiện tại Singapore.
+
+\subsection{Triển khai automation}
+
+Automation stack được triển khai tại Singapore sau khi các ARN của Primary alarm, source database, DR backup vault và runtime template đã sẵn sàng. EventBridge tại Sydney chuyển sự kiện alarm sang custom event bus tại Singapore; Step Functions tiếp nhận sự kiện và điều phối toàn bộ quá trình phục hồi.
+
+\section{Kịch bản kiểm thử DR}
+
+Nhóm sử dụng execution \path{real-data-dr-20260930-214735}, bắt đầu lúc 14:49:42 UTC ngày 30/09/2026. Kịch bản chạy theo chế độ an toàn với các giá trị sau:
+
+\begin{itemize}
+  \item trigger: \texttt{manual-test};
+  \item mô phỏng sự cố và test mode: bật;
+  \item chuyển Route~53: bỏ qua.
+\end{itemize}
+
+Nhờ đó workflow đi qua toàn bộ quá trình tạo runtime, restore database, scale ECS và kiểm tra ALB nhưng không thay đổi DNS production.
+
+Quá trình thực nghiệm diễn ra theo thứ tự:
+
+\begin{enumerate}
+  \item khởi tạo execution và chiếm DynamoDB lock;
+  \item xác nhận điều kiện DR, sau đó tạo stack \texttt{prod-dr-runtime-production};
+  \item chọn recovery point trong vault Singapore và khởi tạo AWS Backup restore job;
+  \item chờ RDS ở trạng thái \texttt{available}, cập nhật runtime secret;
+  \item scale ba service \texttt{auth}, \texttt{product} và \texttt{order} lên desired count 1;
+  \item kiểm tra ba target group đến khi tất cả healthy;
+  \item bỏ qua Route~53 cutover, gửi thông báo hoàn tất và giải phóng lock.
+\end{enumerate}
+
+\begin{table}[H]
+\centering
+\caption{Kết quả các hạng mục kiểm thử}
+\label{tab:test-status}
+\begin{tabularx}{\textwidth}{@{}p{4cm}p{5cm}X@{}}
+\toprule
+\textbf{Hạng mục} & \textbf{Cách thực hiện} & \textbf{Kết quả} \\
+\midrule
+Khởi tạo DR workflow & Manual safe test & Thành công \\
+Tạo DR runtime & CloudFormation nested stack & Thành công \\
+Restore RDS & AWS Backup recovery point tại Singapore & Thành công \\
+Khởi chạy ECS & Scale ba service sau khi RDS available & Thành công \\
+ALB health gate & Hai lần gọi Lambda \texttt{check-alb} & Thành công \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Quá trình triển khai và thực hiện kịch bản DR được nhóm ghi lại dưới dạng video demo. Timeline định lượng trong báo cáo được đối chiếu độc lập từ lịch sử dịch vụ AWS.
+
+\section{Kết quả thực nghiệm}
+
+CloudTrail ghi nhận execution bắt đầu lúc \texttt{14:49:42 UTC}. CloudFormation runtime hoàn tất lúc \texttt{14:58:46.717 UTC}. AWS Backup restore job \texttt{1816ab82-...-013f29ece4bf} chạy từ \texttt{14:58:51.187 UTC} đến \texttt{15:07:18.723 UTC} với trạng thái \texttt{COMPLETED}. Ba ECS service được scale lúc \texttt{15:07:55 UTC}. Lần kiểm tra ALB thứ hai hoàn tất lúc \texttt{15:08:56.762 UTC}; ngay sau đó workflow kiểm tra Primary lần cuối và giải phóng lock. Bảng~\ref{tab:experiment-milestones} trích trực tiếp các trường có giá trị minh chứng từ dữ liệu AWS; Account ID và ARN đầy đủ không được đưa vào báo cáo.
+
+\begin{table}[H]
+\centering
+\caption{Các mốc chính của lần thực nghiệm DR ngày 30/09/2026}
+\label{tab:experiment-milestones}
+\small
+\begin{tabularx}{\textwidth}{@{}p{4.2cm}p{3.4cm}X@{}}
+\toprule
+\textbf{Mốc quan sát} & \textbf{Thời điểm UTC} & \textbf{Nguồn và giá trị minh chứng} \\
+\midrule
+\texttt{StartExecution} & 14:49:42.000 & CloudTrail; execution \texttt{real-data-dr-20260930-214735} \\
+CloudFormation \texttt{CREATE\_COMPLETE} & 14:58:46.717 & Stack \texttt{prod-dr-runtime-production} \\
+AWS Backup restore bắt đầu & 14:58:51.187 & Restore job \texttt{1816ab82-...-013f29ece4bf} \\
+AWS Backup restore hoàn tất & 15:07:18.723 & Trạng thái \texttt{COMPLETED}, tiến độ \texttt{100.00\%} \\
+RDS \texttt{available} được quan sát & 15:07:53.939 & Lambda \texttt{update-secret}; DB \texttt{prod-dr-restored-db} \\
+ECS bắt đầu scale & 15:07:55.000 & Cluster \texttt{prod-dr-dr-ecs}; ba service lên desired count 1 \\
+Các ALB target group healthy & 15:08:56.762 & Lần gọi \texttt{check-alb} thứ hai; ba target group qua health gate \\
+Release lock hoàn tất & 15:08:59.230 & Lambda \texttt{manage-lock}; bước cuối quan sát được của workflow \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{table}[H]
+\centering
+\caption{Thời lượng các giai đoạn của lần thực nghiệm DR}
+\label{tab:experiment-timeline}
+\begin{tabularx}{\textwidth}{@{}p{4.2cm}p{3.2cm}p{3.2cm}r@{}}
+\toprule
+\textbf{Giai đoạn} & \textbf{Bắt đầu UTC} & \textbf{Kết thúc UTC} & \textbf{Thời lượng} \\
+\midrule
+Chuẩn bị trước khi tạo runtime & 14:49:42.000 & 14:51:15.738 & 1 phút 33,738 giây \\
+Tạo DR runtime stack & 14:51:15.738 & 14:58:46.717 & 7 phút 30,979 giây \\
+Chuyển tiếp sang restore job & 14:58:46.717 & 14:58:51.187 & 4,470 giây \\
+Restore RDS bằng AWS Backup & 14:58:51.187 & 15:07:18.723 & 8 phút 27,536 giây \\
+Chờ workflow quan sát RDS available & 15:07:18.723 & 15:07:53.939 & 35,216 giây \\
+Cập nhật secret và bắt đầu scale ECS & 15:07:53.939 & 15:07:55.000 & 1,061 giây \\
+Scale ECS đến ALB healthy & 15:07:55.000 & 15:08:56.762 & 1 phút 1,762 giây \\
+ALB healthy đến release lock & 15:08:56.762 & 15:08:59.230 & 2,468 giây \\
+\midrule
+\textbf{Tổng: workflow start đến ALB healthy} & \textbf{14:49:42.000} & \textbf{15:08:56.762} & \textbf{19 phút 14,762 giây} \\
+Tổng: workflow start đến release lock & 14:49:42.000 & 15:08:59.230 & 19 phút 17,230 giây \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  xbar,
+  width=0.86\textwidth,
+  height=7.2cm,
+  xlabel={Thời lượng (giây)},
+  xmin=0,
+  xmax=620,
+  bar width=10pt,
+  symbolic y coords={Kích hoạt ứng dụng,Restore RDS,Chuyển tiếp restore,Tạo DR runtime,Chuẩn bị workflow},
+  ytick=data,
+  y dir=reverse,
+  nodes near coords,
+  nodes near coords align={horizontal},
+  every node near coord/.append style={font=\scriptsize},
+  tick label style={font=\small},
+  label style={font=\small},
+  grid=major,
+  grid style={draw=gray!20},
+  axis line style={draw=gray!60},
+  enlarge y limits=0.12
+]
+\addplot[fill=blue!55,draw=blue!70!black] coordinates {
+  (98.039,Kích hoạt ứng dụng)
+  (507.536,Restore RDS)
+  (4.470,Chuyển tiếp restore)
+  (450.979,Tạo DR runtime)
+  (93.738,Chuẩn bị workflow)
+};
+\end{axis}
+\end{tikzpicture}
+\caption{Thời lượng các giai đoạn từ workflow start đến ALB healthy}
+\label{fig:recovery-stage-duration}
+\end{figure}
+
+Kết quả trong Hình~\ref{fig:recovery-stage-duration} cho thấy phần lớn thời gian tập trung ở hai giai đoạn: tạo runtime CloudFormation và restore RDS. Sau khi restore job hoàn tất, hệ thống cần thêm khoảng 1 phút 38 giây để quan sát RDS available, cập nhật secret, scale ECS và đưa toàn bộ target group về trạng thái healthy.
+
+Thời gian 19 phút 17 giây phù hợp với ghi nhận ban đầu ``khoảng 21 phút'', nhưng có ranh giới đo rõ hơn: từ API \texttt{StartExecution} đến khi bước release lock ngay trước trạng thái thành công hoàn tất. Giá trị này phản ánh thời gian workflow trong điều kiện safe test của đồ án, không phải cam kết SLA của hệ thống production.
+
+\section{Phân tích thời gian phục hồi}
+
+CloudFormation bắt đầu tạo runtime sau khoảng 1 phút 34 giây, tương ứng với bước lock và confirmation window đầu workflow. Runtime stack cần khoảng 7 phút 31 giây để tạo VPC, NAT Gateway, security group, ALB, ECS service zero-count và monitoring. Đây là phần có thể rút ngắn nếu chuyển một số tài nguyên sang mô hình Pilot Light, nhưng đổi lại Singapore sẽ phát sinh chi phí thường trực cao hơn.
+
+RDS restore mất khoảng 8 phút 28 giây và là giai đoạn dài nhất. Thời gian này phụ thuộc kích thước recovery point, DB class và tải của dịch vụ AWS Backup/RDS. Sau restore, việc scale ba ECS service diễn ra song song. Health gate chỉ thành công ở lần kiểm tra thứ hai, khoảng một phút sau khi scale service.
+
+Kịch bản không thực hiện Route~53 cutover, vì vậy timeline không bao gồm thời gian thay đổi record, trạng thái \texttt{INSYNC} hoặc cache DNS phía client. Chu kỳ backup sáu giờ vẫn là yếu tố chính ảnh hưởng đến độ mới của dữ liệu phục hồi. Output đối chiếu record của script cũ không còn, nên lần thực nghiệm này chỉ kết luận thành công ở mức hạ tầng, database restore và application health.
+
+\section{Giới hạn thực nghiệm}
+
+Thực nghiệm được phân tích từ một execution nên chưa thể đánh giá độ biến thiên giữa nhiều lần chạy. State machine đã được xóa sau khi demo, làm execution history gốc không còn truy xuất được; timestamp cuối được xác định từ Lambda release lock ngay trước trạng thái \texttt{DrSucceeded}. Kịch bản cũng không đo downtime bằng probe bên ngoài và không cutover DNS.
+
+Các lần kiểm thử sau nên tự động lưu execution history, CloudFormation events, restore job, target health và probe log vào S3 theo execution ID. Khi có nhiều mẫu trong cùng điều kiện, nhóm mới có thể so sánh độ ổn định của thời gian phục hồi và đánh giá ảnh hưởng của kích thước database.

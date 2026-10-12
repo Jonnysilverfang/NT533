@@ -1,0 +1,22 @@
+{
+  "executionArn": "[REDACTED_ARN]:execution:prod-dr-orchestrator:real-data-dr-20260930-214735",
+  "events": [
+    {"event": "ExecutionStarted", "timestampUtc": "2026-09-30T14:49:42.000Z", "elapsedSeconds": 0.000},
+    {"event": "DrStackCreateStarted", "timestampUtc": "2026-09-30T14:51:15.738Z", "elapsedSeconds": 93.738},
+    {"event": "DrStackCreateComplete", "timestampUtc": "2026-09-30T14:58:46.717Z", "elapsedSeconds": 544.717},
+    {"event": "BackupRestoreStarted", "timestampUtc": "2026-09-30T14:58:51.187Z", "elapsedSeconds": 549.187},
+    {"event": "BackupRestoreCompleted", "timestampUtc": "2026-09-30T15:07:18.723Z", "elapsedSeconds": 1056.723},
+    {"event": "RdsAvailableObserved", "timestampUtc": "2026-09-30T15:07:53.939Z", "elapsedSeconds": 1091.939},
+    {"event": "EcsScaleStarted", "timestampUtc": "2026-09-30T15:07:55.000Z", "elapsedSeconds": 1093.000},
+    {"event": "AlbTargetsHealthyObserved", "timestampUtc": "2026-09-30T15:08:56.762Z", "elapsedSeconds": 1154.762},
+    {"event": "WorkflowTerminalStepCompleted", "timestampUtc": "2026-09-30T15:08:59.230Z", "elapsedSeconds": 1157.230}
+  ],
+  "durations": {
+    "drStackSeconds": 450.979,
+    "drStackFromExecutionSeconds": 544.717,
+    "databaseRestoreSeconds": 507.536,
+    "restoreCompleteToAlbHealthySeconds": 98.039,
+    "executionStartToAlbHealthySeconds": 1154.762,
+    "executionStartToTerminalStepSeconds": 1157.230
+  }
+}

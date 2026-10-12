@@ -1,0 +1,72 @@
+\clearpage
+\chapter{PHÂN CÔNG VÀ MINH CHỨNG THỰC NGHIỆM}
+
+\section{Bảng phân công công việc}
+
+Thông tin thành viên chưa được cung cấp. Nhóm cần hoàn thiện Bảng~\ref{tab:assignment} trước khi nộp.
+
+\begin{table}[H]
+\centering
+\caption{Bảng phân công công việc của nhóm}
+\label{tab:assignment}
+\begin{tabularx}{\textwidth}{@{}l l X X@{}}
+\toprule
+\textbf{MSSV} & \textbf{Họ tên} & \textbf{Nhiệm vụ} & \textbf{Minh chứng}\\
+\midrule
+\textit{CHƯA CUNG CẤP} & \textit{CHƯA CUNG CẤP} & \textit{CHƯA CUNG CẤP} & Commit, tài liệu hoặc log tương ứng\\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Minh chứng thực nghiệm}
+
+Quá trình triển khai và chạy DR được nhóm ghi lại bằng video demo. Dữ liệu định lượng được thu thập từ AWS CloudTrail, CloudFormation stack events, AWS Backup, RDS, ECS và CloudWatch Logs. Bảng~\ref{tab:appendix-evidence-events} trình bày trực tiếp các số liệu minh chứng chính; tên tài nguyên được rút gọn và không chứa Account ID hoặc ARN đầy đủ.
+
+\begin{table}[H]
+\centering
+\caption{Mốc sự kiện và trường evidence được trích từ AWS}
+\label{tab:appendix-evidence-events}
+\scriptsize
+\begin{tabularx}{\textwidth}{@{}p{3.35cm}p{2.7cm}p{3.1cm}X@{}}
+\toprule
+\textbf{Sự kiện} & \textbf{Timestamp UTC} & \textbf{Nguồn} & \textbf{Giá trị minh chứng đã rút gọn} \\
+\midrule
+Workflow bắt đầu & 2026-09-30 14:49:42.000 & CloudTrail \texttt{StartExecution} & \texttt{real-data-dr-20260930-214735} \\
+DR stack hoàn tất & 2026-09-30 14:58:46.717 & CloudFormation stack event & \texttt{prod-dr-runtime-production}; \texttt{CREATE\_COMPLETE} \\
+Restore bắt đầu & 2026-09-30 14:58:51.187 & AWS Backup restore job & \texttt{1816ab82-...-013f29ece4bf}; RDS \\
+Restore hoàn tất & 2026-09-30 15:07:18.723 & AWS Backup restore job & \texttt{COMPLETED}; \texttt{100.00\%} \\
+RDS available được quan sát & 2026-09-30 15:07:53.939 & Lambda invocation log & \texttt{prod-dr-restored-db}; điều kiện trước cập nhật secret \\
+ECS scale & 2026-09-30 15:07:55.000 & CloudTrail \texttt{UpdateService} & Cluster \texttt{prod-dr-dr-ecs}; \texttt{auth}, \texttt{product}, \texttt{order} đều desired count 1 \\
+ALB health gate thành công & 2026-09-30 15:08:56.762 & Lambda invocation log & Lần kiểm tra thứ hai; cả ba target group healthy \\
+Release lock hoàn tất & 2026-09-30 15:08:59.230 & Lambda invocation log & \texttt{manage-lock}; bước cuối quan sát được trước \texttt{DrSucceeded} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{table}[H]
+\centering
+\caption{Thời lượng phục hồi tính từ các timestamp evidence}
+\label{tab:appendix-evidence-durations}
+\small
+\begin{tabularx}{\textwidth}{@{}Xr@{}}
+\toprule
+\textbf{Khoảng đo} & \textbf{Thời lượng} \\
+\midrule
+Workflow start đến lúc bắt đầu tạo DR stack & 1 phút 33,738 giây \\
+Tạo DR runtime stack & 7 phút 30,979 giây \\
+CloudFormation hoàn tất đến restore job bắt đầu & 4,470 giây \\
+AWS Backup restore RDS & 8 phút 27,536 giây \\
+Restore hoàn tất đến RDS available được workflow quan sát & 35,216 giây \\
+RDS available đến ECS scale & 1,061 giây \\
+ECS scale đến ALB healthy & 1 phút 1,762 giây \\
+ALB healthy đến release lock hoàn tất & 2,468 giây \\
+\midrule
+\textbf{Workflow start đến ALB healthy} & \textbf{19 phút 14,762 giây} \\
+Workflow start đến release lock hoàn tất & 19 phút 17,230 giây \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Mốc \texttt{ExecutionSucceeded} chính xác không còn truy xuất được do state machine đã bị xóa. Vì vậy, báo cáo phân biệt rõ ALB healthy tại \texttt{15:08:56.762 UTC} và bước release lock cuối cùng quan sát được tại \texttt{15:08:59.230 UTC}; không thay thế hai mốc này bằng timestamp suy đoán.
+
+Các file JSON và CSV trong \texttt{report/evidence/run-01} tiếp tục được giữ làm dữ liệu gốc để truy vết. Account ID và ARN đầy đủ trong bản lưu repository đã được thay bằng placeholder; báo cáo chỉ trích các timestamp, trạng thái, tên resource ngắn và thời lượng cần thiết cho việc kiểm chứng.
