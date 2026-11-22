@@ -20,7 +20,7 @@ Báo cáo LaTeX dùng UIT Course Report Template, được viết từ source co
 - `evidence/run-06/`: CloudFormation rollback failure test.
 - `evidence/run-07/`: DNS RTO test window stopped before cutover.
 - `evidence/run-08/`: automated failover, DNS Singapore validation and failback Primary.
-- `evidence/run-08/logs/`: extracted execution, CloudFormation, Backup, ECS, alarm, EventBridge and Route 53 logs.
+- `evidence/run-02/` through `evidence/run-08/`: sanitized run summaries. Raw AWS logs remain local and are not published to GitHub.
 - `main-evidence.pdf`: bản PDF mới nhất, đã nhúng trực tiếp bảng mốc sự kiện, bảng thời lượng và biểu đồ phục hồi.
 
 ## Compile
