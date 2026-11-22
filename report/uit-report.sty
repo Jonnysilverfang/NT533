@@ -97,17 +97,9 @@
 \RequirePackage{xurl}
 \RequirePackage{cleveref}
 
-% ==================== BIBLIOGRAPHY (biblatex) ====================
-\RequirePackage[autostyle=false, style=english]{csquotes}
-\RequirePackage[maxcitenames=2, mincitenames=1, backend=biber,
-  sorting=none, bibencoding=utf8, natbib=true, maxbibnames=99]{biblatex}
-\DeclareLanguageMapping{vietnamese}{english}
-\DefineBibliographyStrings{vietnamese}{andothers={và các cộng sự}}
-
-% Heading cho bibliography cuối mỗi chương (cấp section, không đánh số)
-\defbibheading{chapterbib}[\bibname]{%
-  \section*{#1}%
-}
+% ==================== BIBLIOGRAPHY ====================
+% Dùng thebibliography native để biên dịch ổn định trên máy không có
+% cặp phiên bản biblatex/biber tương thích.
 
 % ==================== TÊN VIỆT HOÁ ====================
 \renewcommand{\chaptername}{Chương}

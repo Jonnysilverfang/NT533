@@ -20,8 +20,91 @@ Parameters:
     Type: String
   PrimaryVaultName:
     Type: String
+  LoadBalancerDnsName:
+    Type: String
 
 Resources:
+  ProbeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: PublishPrimaryHealthMetric
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: cloudwatch:PutMetricData
+                Resource: '*'
+
+  PrimaryHealthProbe:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt ProbeRole.Arn
+      Timeout: 10
+      Code:
+        ZipFile: !Sub |
+          import json
+          import time
+          import urllib.request
+          import boto3
+
+          cw = boto3.client("cloudwatch")
+
+          def handler(event, context):
+              value = 0
+              try:
+                  with urllib.request.urlopen("http://${LoadBalancerDnsName}/health", timeout=8) as response:
+                      payload = json.loads(response.read())
+                      value = 1 if response.status == 200 and payload.get("status") == "healthy" and payload.get("database") == "connected" else 0
+              except Exception:
+                  value = 0
+              cw.put_metric_data(Namespace="NT533/DR", MetricData=[{"MetricName":"PrimaryHealth","Dimensions":[{"Name":"Project","Value":"${ProjectName}"}],"Value":value,"Unit":"Count","Timestamp":time.time()}])
+              return {"primary_health": value}
+
+  PrimaryHealthProbeRule:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: rate(1 minute)
+      State: ENABLED
+      Targets:
+        - Id: PrimaryHealthProbe
+          Arn: !GetAtt PrimaryHealthProbe.Arn
+
+  PrimaryHealthProbePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref PrimaryHealthProbe
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt PrimaryHealthProbeRule.Arn
+
+  PrimaryHealthProbeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-primary-probe-failed'
+      Namespace: NT533/DR
+      MetricName: PrimaryHealth
+      Dimensions:
+        - Name: Project
+          Value: !Ref ProjectName
+      Statistic: Minimum
+      Period: 60
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 2
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+
   AuthUnavailableAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
@@ -76,6 +159,24 @@ Resources:
       ComparisonOperator: LessThanThreshold
       TreatMissingData: breaching
 
+  PrimaryRoute53HealthAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-primary-route53-health-failed'
+      AlarmDescription: Independent Route 53 health check reports the Primary endpoint unavailable.
+      Namespace: AWS/Route53
+      MetricName: HealthCheckStatus
+      Dimensions:
+        - Name: HealthCheckId
+          Value: !Ref Route53HealthCheckId
+      Statistic: Minimum
+      Period: 60
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 2
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: notBreaching
+
   PrimaryUnavailableAlarm:
     Type: AWS::CloudWatch::CompositeAlarm
     Properties:
@@ -84,7 +185,9 @@ Resources:
       AlarmRule: !Sub >-
         ALARM("${AuthUnavailableAlarm}") OR
         ALARM("${ProductUnavailableAlarm}") OR
-        ALARM("${OrderUnavailableAlarm}")
+        ALARM("${OrderUnavailableAlarm}") OR
+        ALARM("${PrimaryRoute53HealthAlarm}") OR
+        ALARM("${PrimaryHealthProbeAlarm}")
 
   Dashboard:
     Type: AWS::CloudWatch::Dashboard

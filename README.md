@@ -21,26 +21,27 @@ Dự án này triển khai giải pháp **Disaster Recovery (DR) Multi-Region** 
 
 ### 1.2 Quy trình Tự động Phục hồi khi có Thảm họa (Disaster Recovery Workflow)
 ```text
-Sự cố tại Sydney (Tất cả 3 dịch vụ mất kết nối)
+Sự cố tại Sydney (một hoặc nhiều target group mất healthy host)
   └──> CloudWatch Composite Alarm (Sydney) chuyển trạng thái ALARM
         └──> EventBridge Rule (Sydney) chuyển tiếp event cross-region sang Singapore
               └──> AWS Step Functions State Machine (Singapore) kích hoạt:
                     ├──> Gate 1: Delay 90s và kiểm tra lại Alarm tại Sydney (chống False Positive)
                     ├──> Gate 2: Chiếm Singleton Lock trên DynamoDB (ngăn chặn duplicate restore)
                     ├──> Bước 1: CloudFormation tạo DR Runtime Stack (VPC, NAT, ALB, ECS desiredCount=0)
-                    ├──> Bước 2: Tìm Recovery Point mới nhất tại Singapore Vault -> Gọi AWS Backup khôi phục RDS
+                    ├──> Bước 2: Chọn recovery point mới nhất tại Singapore Vault -> Gọi AWS Backup khôi phục RDS
+                    │          └──> Nếu FAILED/ABORTED: thử recovery point kế tiếp; hết danh sách -> SNS + manual recovery
                     ├──> Bước 3: Lambda cập nhật Runtime Secret (ghép mật khẩu replicate + endpoint RDS mới)
                     ├──> Bước 4: Scale ECS Fargate desiredCount = 1 -> Chờ cả 3 Target Groups pass TCP Health Check
                     ├──> Gate 3: Kiểm tra Primary Alarm lần cuối ngay trước khi cutover DNS
-                    ├──> Bước 5: UPSERT bản ghi Route 53 SECONDARY Failover Alias
+                    ├──> Bước 5: Nếu được phép, UPSERT Route 53 SECONDARY và chờ INSYNC
                     └──> Bước 6: Gửi thông báo hoàn tất phục hồi qua SNS (Email)
 ```
 
 ### 1.3 Đánh giá Chiến lược DR
 - **Chi phí Standby tối thiểu:** Bình thường không phải trả phí cho database hay cụm compute chạy ngầm ở Singapore.
 - **Đánh đổi RTO / RPO:**
-  - **RTO (Recovery Time Objective):** Thời gian phục hồi dự kiến từ 20–40 phút (phụ thuộc vào thời gian CloudFormation dựng VPC/ALB và AWS Backup restore dữ liệu RDS).
-  - **RPO (Recovery Point Objective):** Chu kỳ backup 6 giờ, RPO lý thuyết ≤ 6 giờ cộng độ trễ sao chép cross-region.
+  - **RTO mục tiêu (Recovery Time Objective):** 20–40 phút từ lúc sự cố được xác nhận đến khi người dùng truy cập được DR. Safe test chỉ đo đến ALB healthy; production RTO phải đo đến Route 53 `INSYNC` và external probe PASS.
+  - **RPO mục tiêu (Recovery Point Objective):** tối đa khoảng 6 giờ cộng độ trễ copy cross-Region theo lịch AWS Backup. RPO thực tế = thời điểm sự cố thật trừ `RecoveryPointCreationDate`.
 
 ---
 
@@ -620,6 +621,10 @@ Execution `real-data-dr-20260930-214735` ngày 30/09/2026 được dựng lại 
 
 Kết quả xác minh: workflow khởi tạo thành công, DR runtime đạt `CREATE_COMPLETE`, restore job đạt `COMPLETED`, RDS được quan sát ở trạng thái `available`, ba ECS service được scale lên desired count 1 và ba target group vượt health gate. Safe test không chuyển Route 53. Timestamp `ExecutionSucceeded` không còn truy xuất được vì state machine đã bị xóa; mốc release lock là bước cuối cùng quan sát được, không phải timestamp được suy đoán thay thế.
 
+Run bổ sung `data-dr-20261122-061417` đạt `SUCCEEDED` và đối chiếu record `NT533-DR-TEST-20261122-060513` tại DR thành công. Run `restore-failure-064010` chứng minh failure path restore có kiểm soát. Stack `prod-dr-infra-failure-test` đạt `ROLLBACK_COMPLETE` khi dùng resource không hợp lệ. Run `dns-rto-071010` dừng trước DNS cutover do runtime provisioning chưa hoàn tất. Run 08 bổ sung đã đo được failover DNS thực tế.
+
+Run 08 `production-failover-cutover-084659` đã kiểm thử detection chain bằng custom health probe, tự động kích hoạt Step Functions, tạo DR runtime, restore RDS, scale ECS, tạo Route 53 SECONDARY và phục vụ DNS tại Singapore trong controlled outage. Sau khi Primary hồi phục, DNS trả lại Sydney. Runtime stack và RDS restored đã được cleanup sau diễn tập.
+
 Dữ liệu gốc:
 
 - [`report/evidence/run-01/timeline.csv`](./report/evidence/run-01/timeline.csv)
@@ -641,8 +646,26 @@ Trong báo cáo kỹ thuật, các mốc thời gian phải được trích xu�
 - **T3 — Ứng dụng sẵn sàng:** Timestamp Lambda `check-alb` xác nhận cả 3 Target Groups đều `Healthy`.
 - **T4 — DNS Cutover:** Timestamp Route 53 cập nhật bản ghi SECONDARY thành công (`INSYNC`).
 
-$$\text{RTO Thực tế} = T_4 - T_0 \quad (\text{hoặc } T_3 - T_0 \text{ khi chạy Safe Test})$$
-$$\text{RPO Thực tế} = T_0 - \text{CreationDate của Recovery Point được khôi phục}$$
+$$\text{RTO Safe Test} = T_3 - T_0$$
+$$\text{RTO Production} = T_4 - T_0$$
+$$\text{RPO Thực tế} = \text{IncidentTime} - \text{RecoveryPointCreationDate}$$
+
+### Tiêu chí PASS/FAIL
+
+| Tiêu chí | PASS khi |
+|---|---|
+| Phát hiện | Alarm đúng ngưỡng, EventBridge chuyển event, Step Functions bắt đầu |
+| Dữ liệu | Recovery point `COMPLETED`, RDS `available`, record kiểm thử khớp |
+| Hạ tầng | CloudFormation `CREATE_COMPLETE`, hoặc rollback rõ nguyên nhân |
+| Ứng dụng | Ba target groups healthy, `/health` trả HTTP 200 và database connected |
+| Cutover | Chỉ thực hiện khi Primary vẫn lỗi, Route 53 `INSYNC`, external probe PASS |
+| RTO/RPO | Nằm trong mục tiêu 20–40 phút và RPO không vượt khoảng backup cho phép |
+
+### Số liệu safe test mới nhất
+
+Execution `safe-dr-20261122-051814` hoàn tất lúc `2026-11-22T12:45:00.592+07:00`, bắt đầu lúc `2026-11-22T12:18:14.621+07:00`. Workflow đạt `SUCCEEDED` sau **1.605,971 giây**, tương đương **26,766 phút**. Runtime CloudFormation hoàn tất lúc `12:26:50.673+07:00`, AWS Backup restore đạt `COMPLETED` lúc `12:43:27.474+07:00`, ECS scale bắt đầu lúc `12:43:56.766+07:00` và health gate hoàn tất trước `ExecutionSucceeded`. Đây là RTO safe test đến workflow success; Route 53 `INSYNC` và external DNS probe được bỏ qua nên chưa phải RTO production đầy đủ.
+
+Recovery point được copy sang Singapore có `CreationDate` `2026-11-22T12:07:49.072+07:00`. RPO production phải lấy `IncidentTime` thực tế trừ timestamp này. Safe test hiện dùng `manual-test`, vì vậy không tự nhận thời điểm bắt đầu execution là thời điểm sự cố.
 
 ---
 

@@ -201,7 +201,9 @@ CloudFormation bắt đầu tạo runtime sau khoảng 1 phút 34 giây, tương
 
 RDS restore mất khoảng 8 phút 28 giây và là giai đoạn dài nhất. Thời gian này phụ thuộc kích thước recovery point, DB class và tải của dịch vụ AWS Backup/RDS. Sau restore, việc scale ba ECS service diễn ra song song. Health gate chỉ thành công ở lần kiểm tra thứ hai, khoảng một phút sau khi scale service.
 
-Kịch bản không thực hiện Route~53 cutover, vì vậy timeline không bao gồm thời gian thay đổi record, trạng thái \texttt{INSYNC} hoặc cache DNS phía client. Chu kỳ backup sáu giờ vẫn là yếu tố chính ảnh hưởng đến độ mới của dữ liệu phục hồi. Output đối chiếu record của script cũ không còn, nên lần thực nghiệm này chỉ kết luận thành công ở mức hạ tầng, database restore và application health.
+Kịch bản không thực hiện Route~53 cutover, vì vậy timeline không bao gồm thời gian thay đổi record, trạng thái \texttt{INSYNC} hoặc cache DNS phía client. Chu kỳ backup sáu giờ vẫn là yếu tố chính ảnh hưởng đến độ mới của dữ liệu phục hồi. Do đó, 19 phút 14,762 giây là thời gian safe test đến ALB healthy, chưa phải RTO production đầy đủ. RTO production phải đo đến Route~53 \texttt{INSYNC} và external probe PASS. RPO phải tính từ thời điểm sự cố thật, không dùng mặc định thời điểm bắt đầu Step Functions.
+
+Safe test run 02 ngày 22/11/2026 đạt \texttt{SUCCEEDED} từ `12:18:14.621+07:00` đến `12:45:00.592+07:00`, tương đương `1605.971` giây hoặc `26.766` phút. Runtime stack hoàn tất lúc `12:26:50.673+07:00`; restore job hoàn tất lúc `12:43:27.474+07:00`; ECS bắt đầu scale lúc `12:43:56.766+07:00`. Số đo này là proxy RTO đến workflow success trong safe test. Route~53 không cutover, nên chưa đo được thời gian DNS `INSYNC` và external probe.
 
 \section{Giới hạn thực nghiệm}
 

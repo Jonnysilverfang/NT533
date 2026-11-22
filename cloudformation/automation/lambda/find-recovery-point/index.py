@@ -29,9 +29,17 @@ def handler(event, _context):
             f"No COMPLETED recovery point for {source_resource_arn} found in {vault_name}"
         )
 
-    latest = max(candidates, key=lambda point: point["CreationDate"])
+    candidates.sort(key=lambda point: point["CreationDate"], reverse=True)
+    points = [
+        {
+            "recovery_point_arn": point["RecoveryPointArn"],
+            "creation_date": point["CreationDate"].isoformat(),
+            "resource_arn": point.get("ResourceArn", ""),
+        }
+        for point in candidates
+    ]
     return {
-        "recovery_point_arn": latest["RecoveryPointArn"],
-        "creation_date": latest["CreationDate"].isoformat(),
-        "resource_arn": latest.get("ResourceArn", ""),
+        "point": points[0],
+        "points": points,
+        "count": len(points),
     }

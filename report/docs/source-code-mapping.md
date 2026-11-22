@@ -31,7 +31,7 @@ Tài liệu truy vết nội bộ cho báo cáo NT533. Trạng thái:
 | DR ALB | `cloudformation/dr/alb.yaml` | Path routing và target health tương tự Primary | Chương 3–4 | Implemented; tested by user |
 | DR monitoring | `cloudformation/dr/monitoring.yaml` | Dashboard running task và p99 target response time | Chương 3 | Implemented |
 | Automation root | `cloudformation/automation/root-automation.yaml` | Ghép SNS, lock, IAM, Lambda, Step Functions, EventBridge | Chương 3 | Implemented |
-| State machine | `cloudformation/automation/stepfunctions.yaml` | 57 states; confirmation, restore, health, optional DNS, failure path | Chương 3–4 | Implemented; tested by user once |
+| State machine | `cloudformation/automation/stepfunctions.yaml` | Confirmation, CloudFormation rollback, restore fallback, health gate, optional DNS, failure path | Chương 3–4 | Implemented; cần chạy lại để thu evidence mới |
 | Primary check | `automation/lambda/check-primary/index.py` | Đọc metric/composite alarm; simulation mode | Chương 3 | Implemented |
 | Recovery point selection | `automation/lambda/find-recovery-point/index.py` | Chọn recovery point RDS COMPLETED mới nhất đúng nguồn | Chương 3 | Implemented |
 | Restore start | `automation/lambda/start-restore/index.py` | Chuẩn hóa metadata và gọi AWS Backup restore | Chương 3 | Implemented; tested by user |
@@ -57,3 +57,4 @@ Tài liệu truy vết nội bộ cho báo cáo NT533. Trạng thái:
 3. `prod-primary.json` đặt `EcsDesiredCount=0`; workload Primary cần được scale riêng sau deploy.
 4. Singapore vẫn có chi phí lưu trữ/control-plane; không phải chi phí standby bằng 0 tuyệt đối.
 5. Giá trị 21 phút không có timestamp trong repository; không gọi là RTO chính thức.
+6. Restore fallback dùng recovery point kế tiếp; nếu hết recovery point, workflow dừng ở manual recovery và không cutover DNS.

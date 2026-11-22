@@ -13,6 +13,14 @@ Báo cáo LaTeX dùng UIT Course Report Template, được viết từ source co
 - `docs/implementation-evidence.md`: phân loại implemented/deployed/tested.
 - `docs/experimental-limitations.md`: giới hạn một lần thực nghiệm.
 - `evidence/run-01/`: dữ liệu lịch sử AWS và timeline của lần DR ngày 30/09/2026.
+- `evidence/run-02/`: execution history và số liệu safe DR run ngày 22/11/2026.
+- `evidence/run-03/`: failure-path test với trigger không hợp lệ.
+- `evidence/run-04/`: real-data recovery và record comparison PASS.
+- `evidence/run-05/`: controlled restore failure.
+- `evidence/run-06/`: CloudFormation rollback failure test.
+- `evidence/run-07/`: DNS RTO test window stopped before cutover.
+- `evidence/run-08/`: automated failover, DNS Singapore validation and failback Primary.
+- `evidence/run-08/logs/`: extracted execution, CloudFormation, Backup, ECS, alarm, EventBridge and Route 53 logs.
 - `main-evidence.pdf`: bản PDF mới nhất, đã nhúng trực tiếp bảng mốc sự kiện, bảng thời lượng và biểu đồ phục hồi.
 
 ## Compile
@@ -35,6 +43,6 @@ Hoặc upload toàn bộ thư mục `report/` lên Overleaf và compile bằng p
 
 ## Kết quả thực nghiệm
 
-Execution `real-data-dr-20260930-214735` được truy vết bằng CloudTrail, CloudFormation, AWS Backup và CloudWatch Logs. ALB health gate thành công sau khoảng 19 phút 15 giây; bước cuối của workflow hoàn tất sau khoảng 19 phút 17 giây. Safe test không chuyển Route 53. Không chạy thêm DR mới.
+Execution lịch sử `real-data-dr-20260930-214735` được truy vết bằng CloudTrail, CloudFormation, AWS Backup và CloudWatch Logs. Safe DR run mới `safe-dr-20261122-051814` đạt `SUCCEEDED` sau `1605.971` giây, tương đương `26.766` phút. Failure-path run `failure-path-20261122-054852` bị từ chối đúng với `InvalidTrigger` trước khi tạo runtime. Safe test không chuyển Route 53.
 
-Chương 4 trình bày trực tiếp năm bước thành công từ khởi tạo workflow đến ALB healthy, bảng timestamp, thời lượng từng giai đoạn và biểu đồ phục hồi. Phụ lục C.2 chứa các trường evidence chính đã rút gọn; JSON/CSV gốc vẫn nằm trong `evidence/run-01/` để truy vết. Không kết luận record-level data validation PASS vì output đối chiếu record của lần chạy cũ không còn.
+Chương 4 trình bày các bước thành công từ khởi tạo workflow đến ALB healthy, bảng timestamp, thời lượng từng giai đoạn và biểu đồ phục hồi. Run 04 đã đối chiếu record ứng dụng và đạt `DataRestoreValidation: PASS`. Run 05 chứng minh restore failure path; run 06 chứng minh CloudFormation `ROLLBACK_COMPLETE`; run 07 dừng trước DNS cutover; Run 08 sau đó chứng minh DNS failover sang Singapore và failback về Sydney.

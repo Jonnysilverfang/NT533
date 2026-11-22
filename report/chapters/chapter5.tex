@@ -17,8 +17,8 @@ Backup/copy RDS & Hoàn thành & Recovery point Singapore được restore thàn
 Replicate image/secret & Hoàn thành & Artifact cần thiết có mặt tại DR Region \\
 Tự động dựng DR runtime & Hoàn thành & Runtime stack đạt \texttt{CREATE\_COMPLETE} \\
 Khởi chạy ứng dụng DR & Hoàn thành & Ba ECS service được scale và ALB health gate thành công \\
-Kiểm tra dữ liệu record & Chưa kết luận & Không còn output đối chiếu record của lần chạy \\
-DNS cutover & Không thuộc safe test & Workflow chủ động bỏ qua Route~53 \\
+Kiểm tra dữ liệu record & Hoàn thành & Run 04 đối chiếu record tại DR đạt PASS \\
+DNS cutover & Hoàn thành & Run 08 chuyển DNS sang Singapore và failback về Sydney \\
 Cleanup & Hoàn thành & RDS restore và runtime stack đã được xóa sau test \\
 \bottomrule
 \end{tabularx}
@@ -44,9 +44,9 @@ Workflow có khả năng tạo record Route~53 SECONDARY, nhưng input EventBrid
 
 \subsection{Failback và dữ liệu}
 
-Đồ án chưa có workflow failback từ Singapore về Sydney. Nếu ứng dụng nhận dữ liệu mới sau cutover, việc quay lại Primary cần quy trình backup hoặc replication ngược, kiểm tra consistency và kiểm soát thời điểm dừng ghi. Cleanup đơn thuần không thể thay thế failback.
+Đồ án chưa có workflow failback dữ liệu hai chiều từ Singapore về Sydney. Nếu ứng dụng nhận dữ liệu mới sau cutover, việc quay lại Primary cần quy trình backup hoặc replication ngược, kiểm tra consistency và kiểm soát thời điểm dừng ghi. Run 08 đã kiểm thử DNS failback về Sydney, nhưng chưa thay thế cho quy trình đồng bộ dữ liệu hai chiều.
 
-Output của bước đối chiếu record trong kịch bản cũ không còn được lưu, nên kết quả hiện tại không dùng để khẳng định dữ liệu ứng dụng đầu cuối đã được xác minh. Lần thử tiếp theo cần lưu ID record trước backup và kết quả truy vấn sau restore.
+Run 04 đã lưu ID record trước backup và kết quả truy vấn sau restore, đạt `DataRestoreValidation: PASS`.
 
 \subsection{Idempotency và vận hành}
 
@@ -76,4 +76,4 @@ Mỗi hướng tối ưu đều làm thay đổi chi phí và độ phức tạp
 
 Đồ án đã xây dựng và kiểm thử được hệ thống Disaster Recovery đa vùng trên AWS theo chiến lược Backup and Restore. Workload chính chạy tại Sydney; Singapore lưu các artifact phục hồi và chỉ tạo runtime khi workflow được kích hoạt. Step Functions tự động phối hợp CloudFormation, AWS Backup, RDS, Secrets Manager, ECS và ALB để đưa ứng dụng dự phòng về trạng thái healthy.
 
-Kết quả thực nghiệm ghi nhận application health sau khoảng 19 phút 15 giây và đường workflow hoàn tất sau khoảng 19 phút 17 giây trong chế độ safe test. Mô hình cho thấy khả năng giảm đáng kể chi phí standby so với việc chạy hai Region đầy đủ, với đánh đổi là thời gian tạo hạ tầng và restore database. Đây là nền tảng phù hợp để tiếp tục phát triển failback, HA trong Region và hệ thống đo lường tự động cho các lần diễn tập tiếp theo.
+Kết quả thực nghiệm lịch sử ghi nhận application health sau khoảng 19 phút 15 giây. Safe test run 02 ngày 22/11/2026 đạt workflow success sau `1605.971` giây, tương đương `26.766` phút. Hai số đo khác nhau do kích thước recovery point, thời gian provisioning và điều kiện dịch vụ tại từng lần chạy. Cả hai đều chưa bao gồm Route~53 cutover. Mô hình cho thấy khả năng giảm chi phí standby so với việc chạy hai Region đầy đủ, với đánh đổi là thời gian tạo hạ tầng và restore database.

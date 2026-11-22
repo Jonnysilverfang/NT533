@@ -1,6 +1,5 @@
-import hashlib
 import json
-import uuid
+import hashlib
 
 import boto3
 
@@ -10,6 +9,8 @@ rds = boto3.client("rds")
 
 
 def handler(event, _context):
+    if event.get("force_restore_failure", False):
+        raise RuntimeError("Injected restore failure for controlled DR failure-path test")
     recovery_point_arn = event["recovery_point_arn"]
     db_identifier = event["db_instance_identifier"]
     try:
@@ -66,7 +67,10 @@ def handler(event, _context):
         }
     )
 
-    token = uuid.uuid4().hex[:32]
+    execution_id = event.get("execution_id", "unknown-execution")
+    token = hashlib.sha256(
+        f"{execution_id}:{recovery_point_arn}:{db_identifier}".encode("utf-8")
+    ).hexdigest()[:32]
     response = backup.start_restore_job(
         RecoveryPointArn=recovery_point_arn,
         IamRoleArn=event["restore_role_arn"],

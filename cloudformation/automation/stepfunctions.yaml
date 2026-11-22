@@ -209,7 +209,7 @@ Resources:
               "FindLatestRecoveryPoint": {
                 "Type": "Task", "Resource": "arn:${AWS::Partition}:states:::lambda:invoke",
                 "Parameters": {"FunctionName": "${FindRecoveryPointFunctionArn}", "Payload": {"backup_vault_name": "${DrBackupVaultName}", "source_resource_arn": "${SourceDatabaseArn}"}},
-                "ResultSelector": {"point.$": "$.Payload"}, "ResultPath": "$.recovery",
+                "ResultSelector": {"points.$": "$.Payload.points", "count.$": "$.Payload.count", "selected.$": "$.Payload.point", "fallback_attempted": false}, "ResultPath": "$.recovery",
                 "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 5, "MaxAttempts": 4, "BackoffRate": 2}],
                 "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "NotifyFailure"}],
                 "Next": "StartRdsRestore"
@@ -217,10 +217,10 @@ Resources:
               "StartRdsRestore": {
                 "Type": "Task", "Resource": "arn:${AWS::Partition}:states:::lambda:invoke",
                 "Parameters": {"FunctionName": "${StartRestoreFunctionArn}", "Payload": {
-                  "recovery_point_arn.$": "$.recovery.point.recovery_point_arn", "backup_vault_name": "${DrBackupVaultName}",
+                  "recovery_point_arn.$": "$.recovery.selected.recovery_point_arn", "backup_vault_name": "${DrBackupVaultName}",
                   "restore_role_arn": "${BackupRestoreRoleArn}", "db_instance_identifier": "${DbInstanceIdentifier}",
                   "db_instance_class": "${DbInstanceClass}", "db_subnet_group_name.$": "$.dr.outputs.DbSubnetGroupName",
-                  "db_security_group_id.$": "$.dr.outputs.DbSecurityGroupId", "test_mode.$": "$.test_mode"
+                  "db_security_group_id.$": "$.dr.outputs.DbSecurityGroupId", "test_mode.$": "$.test_mode", "execution_id.$": "$$.Execution.Id"
                 }},
                 "ResultSelector": {"job.$": "$.Payload"}, "ResultPath": "$.restore",
                 "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 5, "MaxAttempts": 3, "BackoffRate": 2}],
@@ -229,7 +229,7 @@ Resources:
               },
               "NotifyRestoreStarted": {
                 "Type": "Task", "Resource": "arn:${AWS::Partition}:states:::sns:publish",
-                "Parameters": {"TopicArn": "${NotificationTopicArn}", "Subject": "RDS restore started", "Message.$": "States.Format('Restore job {} started from {}', $.restore.job.restore_job_id, $.recovery.point.creation_date)"},
+                "Parameters": {"TopicArn": "${NotificationTopicArn}", "Subject": "RDS restore started", "Message.$": "States.Format('Restore job {} started from {}', $.restore.job.restore_job_id, $.recovery.selected.creation_date)"},
                 "ResultPath": "$.notification",
                 "Catch": [{"ErrorEquals":["States.ALL"],"ResultPath":"$.notification_error","Next":"WaitForRestore"}],
                 "Next": "WaitForRestore"
@@ -251,7 +251,9 @@ Resources:
                 ],
                 "Default": "WaitForRestore"
               },
-              "RestoreFailed": {"Type":"Pass","Result":{"Cause":"AWS Backup restore job failed"},"ResultPath":"$.error","Next":"NotifyFailure"},
+              "RestoreFailed": {"Type":"Choice","Choices":[{"And":[{"Variable":"$.recovery.fallback_attempted","BooleanEquals":false},{"Variable":"$.recovery.points[1].recovery_point_arn","IsPresent":true}],"Next":"SelectFallbackRecoveryPoint"}],"Default":"RestoreFailureTerminal"},
+              "SelectFallbackRecoveryPoint": {"Type":"Pass","Parameters":{"selected.$":"$.recovery.points[1]","points.$":"$.recovery.points","count.$":"$.recovery.count","fallback_attempted":true},"ResultPath":"$.recovery","Next":"StartRdsRestore"},
+              "RestoreFailureTerminal": {"Type":"Pass","Result":{"Cause":"AWS Backup restore failed for the newest recovery point and no unused fallback recovery point remains","Stage":"data-restore","NextAction":"manual-recovery"},"ResultPath":"$.error","Next":"NotifyFailure"},
               "DescribeRestoredDatabase": {
                 "Type": "Task", "Resource": "arn:${AWS::Partition}:states:::aws-sdk:rds:describeDBInstances",
                 "Parameters": {"DbInstanceIdentifier": "${DbInstanceIdentifier}"}, "ResultPath": "$.database",
@@ -347,14 +349,13 @@ Resources:
               "SkipDnsRequested": {
                 "Type":"Choice",
                 "Choices":[
-                  {"Variable":"$.skip_route53_switch","BooleanEquals":true,"Next":"NotifyTestComplete"},
-                  {"Variable":"$.SkipRoute53Switch","BooleanEquals":true,"Next":"NotifyTestComplete"}
+                  {"Variable":"$.skip_route53_switch","BooleanEquals":true,"Next":"NotifyTestComplete"}
                 ],
                 "Default":"UpsertSecondaryRecord"
               },
               "UpsertSecondaryRecord": {
                 "Type":"Task","Resource":"arn:${AWS::Partition}:states:::aws-sdk:route53:changeResourceRecordSets",
-                "Parameters":{"HostedZoneId":"${HostedZoneId}","ChangeBatch":{"Comment":"Confirmed DR cutover","Changes":[{"Action":"UPSERT","ResourceRecordSet":{"Name":"${DomainName}","Type":"A","SetIdentifier":"secondary-singapore","Failover":"SECONDARY","AliasTarget":{"DNSName.$":"$.dr.outputs.LoadBalancerDnsName","HostedZoneId.$":"$.dr.outputs.LoadBalancerCanonicalHostedZoneId","EvaluateTargetHealth":true}}}]}},
+                "Parameters":{"HostedZoneId":"${HostedZoneId}","ChangeBatch":{"Comment":"Confirmed DR cutover","Changes":[{"Action":"UPSERT","ResourceRecordSet":{"Name":"${DomainName}","Type":"A","SetIdentifier":"secondary-singapore","Failover":"SECONDARY","AliasTarget":{"DnsName.$":"$.dr.outputs.LoadBalancerDnsName","HostedZoneId.$":"$.dr.outputs.LoadBalancerCanonicalHostedZoneId","EvaluateTargetHealth":true}}}]}},
                 "Retry":[{"ErrorEquals":["Route53.PriorRequestNotCompleteException","Route53.ThrottlingException"],"IntervalSeconds":5,"MaxAttempts":6,"BackoffRate":2}],
                 "Catch":[{"ErrorEquals":["States.ALL"],"ResultPath":"$.error","Next":"NotifyFailure"}],
                 "Next":"NotifyRoute53Switched"

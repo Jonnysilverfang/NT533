@@ -173,7 +173,7 @@ Nếu sự cố còn tồn tại, workflow tạo stack \texttt{prod-dr-runtime-p
 
 \subsection{Đường thất bại và rollback}
 
-Các Task quan trọng có Catch chuyển đến \texttt{NotifyFailure}; workflow gửi SNS, giải phóng lock và kết thúc \texttt{Fail}. Stack creation dùng rollback của CloudFormation. ECS service dùng deployment circuit breaker. Tuy nhiên workflow không có compensating transaction để xóa stack hoặc RDS sau lỗi. Đây là quyết định an toàn vì tự động xóa có thể phá bằng chứng hoặc dữ liệu cần điều tra, nhưng làm tăng yêu cầu runbook cleanup thủ công.
+Các Task quan trọng có Catch chuyển đến \texttt{NotifyFailure}; workflow gửi SNS, giải phóng lock và kết thúc \texttt{Fail}. Stack creation dùng rollback của CloudFormation. ECS service dùng deployment circuit breaker. Nếu restore recovery point mới nhất trả về \texttt{FAILED} hoặc \texttt{ABORTED}, workflow chọn recovery point kế tiếp chưa thử. Khi hết recovery point, workflow ghi stage \texttt{data-restore}, gửi SNS và chuyển manual recovery. Lỗi CloudFormation được giữ lại cùng stack events để điều tra; cleanup là quy trình riêng có xác nhận, tránh xóa bằng chứng hoặc dữ liệu cần phục hồi.
 
 \subsection{Retry và timeout}
 

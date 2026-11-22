@@ -218,6 +218,7 @@ Resources:
         AuthTargetGroupFullName: !GetAtt AlbStack.Outputs.AuthTargetGroupFullName
         ProductTargetGroupFullName: !GetAtt AlbStack.Outputs.ProductTargetGroupFullName
         OrderTargetGroupFullName: !GetAtt AlbStack.Outputs.OrderTargetGroupFullName
+        LoadBalancerDnsName: !GetAtt AlbStack.Outputs.LoadBalancerDnsName
         ClusterName: !GetAtt EcsStack.Outputs.ClusterName
         DatabaseIdentifier: !GetAtt RdsStack.Outputs.DatabaseIdentifier
         Route53HealthCheckId: !GetAtt Route53Stack.Outputs.Route53HealthCheckId
